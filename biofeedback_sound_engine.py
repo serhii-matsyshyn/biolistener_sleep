@@ -12,7 +12,7 @@ try:
     s.setOutputDevice(DEVICE_INDEX)
     s.boot()
     s.start()
-    print(f">>> SUCCESS: 2-Column Engine Live on Device {DEVICE_INDEX}.")
+    print(f">>> SUCCESS: Deep Layer Engine Live on Device {DEVICE_INDEX}.")
 except Exception as e:
     print(f"ERROR: {e}")
     sys.exit()
@@ -23,7 +23,7 @@ except Exception as e:
 # Global Control
 target_hz = SigTo(value=0, time=0.5, init=0)
 
-# Music Layer (Sunlight Pads)
+# --- MUSIC LAYER (Sunlight Pads) ---
 freqs = [130.81, 196.00, 246.94, 293.66, 329.63]
 lfo_L = Sine(freq=[0.10, 0.13, 0.09, 0.11, 0.14], mul=0.1, add=0.15)
 lfo_R = Sine(freq=[0.11, 0.12, 0.08, 0.10, 0.15], mul=0.1, add=0.15)
@@ -31,31 +31,46 @@ saw_L = SuperSaw(freq=[f * 0.995 for f in freqs], detune=0.4, mul=lfo_L).mix(1)
 saw_R = SuperSaw(freq=[f * 1.005 for f in freqs], detune=0.4, mul=lfo_R).mix(1)
 raw_music = Sig([saw_L, saw_R])
 
-# Texture (Ocean LFO)
+# --- TEXTURE 1: PINK NOISE (The Air) ---
+# Simulates wind/rain
 noise_lfo = Sine(freq=0.05, mul=200, add=400)
-stereo_noise = Sig([Biquad(PinkNoise(mul=0.03), freq=noise_lfo, q=1),
-                    Biquad(PinkNoise(mul=0.03), freq=noise_lfo, q=1)])
+pink_L = Biquad(PinkNoise(mul=0.03), freq=noise_lfo, q=1)
+pink_R = Biquad(PinkNoise(mul=0.03), freq=noise_lfo, q=1)
+stereo_pink = Sig([pink_L, pink_R])
 
-# Strobe Modulator (Isochronic)
+# --- TEXTURE 2: BROWN NOISE (The Ground) ---
+# Simulates thunder/waterfall
+brown_vol = SigTo(value=0, time=0.5, init=0)
+# We filter it at 300Hz so it only occupies the deep low end
+brown_L = Biquad(BrownNoise(mul=brown_vol), freq=300, q=1)
+brown_R = Biquad(BrownNoise(mul=brown_vol), freq=300, q=1)
+stereo_brown = Sig([brown_L, brown_R])
+
+# --- Strobe Modulator (Isochronic) ---
 strobe_depth = SigTo(value=0, time=0.1, init=0)
 pulse_wave = Sine(freq=target_hz, mul=0.5, add=0.5)
 final_modulator = (pulse_wave * strobe_depth) + (1 - strobe_depth)
 pulsing_music = raw_music * final_modulator
 
-# Binaural Layer
+# --- BINAURAL LAYER ---
 carrier_freq = 150
 binaural_vol = SigTo(value=0, time=0.2, init=0)
 stereo_binaural = Sig([Sine(freq=carrier_freq, mul=binaural_vol),
                        Sine(freq=carrier_freq + target_hz, mul=binaural_vol)])
 
-# Effects & Mix
+# --- MIXER ---
 val_cutoff = SigTo(value=500, time=0.2, init=500)
 val_reverb = SigTo(value=0.8, time=0.2, init=0.8)
 val_vol = SigTo(value=0.5, time=0.2, init=0.5)
 
 filtered = Biquad(pulsing_music, freq=val_cutoff, q=0.5)
 chorused = Chorus(filtered, depth=0.9, feedback=0.4, bal=0.5)
-music_layer = Freeverb(chorused + stereo_noise, size=val_reverb, damp=0.8, bal=0.5)
+
+# Mix: Music + Pink Air + Brown Rumble
+# Note: We mix textures BEFORE reverb so they sound vast
+texture_mix = chorused + stereo_pink + stereo_brown
+music_layer = Freeverb(texture_mix, size=val_reverb, damp=0.8, bal=0.5)
+
 final_out = (music_layer + stereo_binaural) * val_vol
 final_out.out()
 
@@ -64,7 +79,7 @@ final_out.out()
 # ==========================================
 root = tk.Tk()
 root.title("Hybrid Biofeedback Sound Engine")
-root.geometry("700x450")  # Wide & Short
+root.geometry("700x600")  # Wide & Short
 root.configure(bg="#263238")
 
 # Styles
@@ -79,26 +94,41 @@ def update_hz(val):
     target_hz.value = hz
     state = "(OFF)"
     if hz >= 0.1:
-        if hz < 4: state = "(DELTA)"
-        elif hz < 8: state = "(THETA)"
-        elif hz < 14: state = "(ALPHA)"
-        else: state = "(BETA)"
+        if hz < 4:
+            state = "(DELTA)"
+        elif hz < 8:
+            state = "(THETA)"
+        elif hz < 14:
+            state = "(ALPHA)"
+        else:
+            state = "(BETA)"
     lbl_hz_state.config(text=f"{hz} Hz {state}")
+
 
 def update_strobe(val):
     strobe_depth.value = float(val) / 100.0
 
+
 def update_bin(val):
     binaural_vol.value = (float(val) / 100.0) * 0.05
+
+
+def update_brown(val):
+    # Brown noise is naturally loud, so we cap it at 0.1
+    brown_vol.value = (float(val) / 100.0) * 0.1
+
 
 def update_vol(val):
     val_vol.value = float(val) / 100.0
 
+
 def update_warm(val):
     val_cutoff.value = 100 + (float(val) * float(val) * 0.15)
 
+
 def update_space(val):
     val_reverb.value = min(float(val) / 100.0, 0.95)
+
 
 # --- HEADER ---
 tk.Label(root, text="HYBRID BIOFEEDBACK SOUND ENGINE", bg="#263238", fg="#80cbc4", font=("Helvetica", 16, "bold")).pack(pady=15)
@@ -127,7 +157,7 @@ tk.Label(left_col, text="SYNC FREQUENCY (Hz)", **lbl_style).pack(anchor="w")
 lbl_hz_state = tk.Label(left_col, text="0.0 Hz (OFF)", **val_style)
 lbl_hz_state.pack(anchor="w")
 s_hz = tk.Scale(left_col, from_=0.0, to=20.0, resolution=0.1, orient=tk.HORIZONTAL, command=update_hz, **scale_style)
-s_hz.set(0)
+s_hz.set(10)
 s_hz.pack(pady=5)
 
 # === RIGHT COLUMN (Pulse & Vibe) ===
@@ -139,12 +169,12 @@ tk.Label(right_col, text="PULSE & ATMOSPHERE", fg="#90a4ae", bg="#263238", font=
 # Pulse Methods
 tk.Label(right_col, text="1. Music Strobe (Isochronic)", **lbl_style).pack(anchor="w")
 s_strobe = tk.Scale(right_col, from_=0, to=100, orient=tk.HORIZONTAL, command=update_strobe, **scale_style)
-s_strobe.set(0)
+s_strobe.set(10)
 s_strobe.pack(pady=5)
 
 tk.Label(right_col, text="2. Binaural Hum (Phantom)", **lbl_style).pack(anchor="w")
 s_bin = tk.Scale(right_col, from_=0, to=100, orient=tk.HORIZONTAL, command=update_bin, **scale_style)
-s_bin.set(0)
+s_bin.set(10)
 s_bin.pack(pady=5)
 
 # Atmosphere
@@ -152,18 +182,25 @@ tk.Frame(right_col, height=2, bg="#37474f").pack(fill="x", pady=10)
 
 tk.Label(right_col, text="Warmth / Filter", **lbl_style).pack(anchor="w")
 s_warm = tk.Scale(right_col, from_=0, to=100, orient=tk.HORIZONTAL, command=update_warm, **scale_style)
-s_warm.set(60)
+s_warm.set(80)
 s_warm.pack(pady=2)
+
+tk.Label(right_col, text="Deep Layer (Brown Noise)", **lbl_style).pack(anchor="w")
+s_brown = tk.Scale(right_col, from_=0, to=100, orient=tk.HORIZONTAL, command=update_brown, **scale_style)
+s_brown.set(80)
+s_brown.pack(pady=2)
 
 tk.Label(right_col, text="Space / Reverb", **lbl_style).pack(anchor="w")
 s_space = tk.Scale(right_col, from_=0, to=100, orient=tk.HORIZONTAL, command=update_space, **scale_style)
 s_space.set(80)
 s_space.pack(pady=2)
 
+
 # --- CLEAN EXIT ---
 def on_closing():
     s.stop()
     root.destroy()
+
 
 root.protocol("WM_DELETE_WINDOW", on_closing)
 print("GUI Ready.")
