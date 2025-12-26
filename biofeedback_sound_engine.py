@@ -5,7 +5,7 @@ from pyo import *
 # ==========================================
 # 1. SETUP AUDIO SERVER
 # ==========================================
-DEVICE_INDEX = 3  # Realtek
+DEVICE_INDEX = -1
 
 try:
     s = Server(nchnls=2, duplex=0, buffersize=1024)
@@ -46,6 +46,12 @@ brown_L = Biquad(BrownNoise(mul=brown_vol), freq=300, q=1)
 brown_R = Biquad(BrownNoise(mul=brown_vol), freq=300, q=1)
 stereo_brown = Sig([brown_L, brown_R])
 
+# --- STEREO TESTER (Ping Pong) ---
+ping_pong_clk = LFO(freq=0.25, type=2).range(-1, 1)
+test_freq = (ping_pong_clk * 200) + 600
+test_beep = Sine(freq=test_freq, mul=0)
+test_panned = Pan(test_beep, outs=2, pan=ping_pong_clk)
+
 # --- Strobe Modulator (Isochronic) ---
 strobe_depth = SigTo(value=0, time=0.1, init=0)
 pulse_wave = Sine(freq=target_hz, mul=0.5, add=0.5)
@@ -66,9 +72,9 @@ val_vol = SigTo(value=0.5, time=0.2, init=0.5)
 filtered = Biquad(pulsing_music, freq=val_cutoff, q=0.5)
 chorused = Chorus(filtered, depth=0.9, feedback=0.4, bal=0.5)
 
-# Mix: Music + Pink Air + Brown Rumble
+# Mix: Music + Pink Air + Brown Rumble + PingPong
 # Note: We mix textures BEFORE reverb so they sound vast
-texture_mix = chorused + stereo_pink + stereo_brown
+texture_mix = chorused + stereo_pink + stereo_brown + test_panned
 music_layer = Freeverb(texture_mix, size=val_reverb, damp=0.8, bal=0.5)
 
 final_out = (music_layer + stereo_binaural) * val_vol
@@ -130,6 +136,15 @@ def update_space(val):
     val_reverb.value = min(float(val) / 100.0, 0.95)
 
 
+def toggle_test():
+    if btn_test['text'] == "START PING PONG":
+        test_beep.mul = 0.2
+        btn_test.config(text="STOP TEST", bg="#cfd8dc", fg="#263238")
+    else:
+        test_beep.mul = 0
+        btn_test.config(text="START PING PONG", bg="#37474f", fg="#cfd8dc")
+
+
 # --- HEADER ---
 tk.Label(root, text="HYBRID BIOFEEDBACK SOUND ENGINE", bg="#263238", fg="#80cbc4", font=("Helvetica", 16, "bold")).pack(pady=15)
 
@@ -159,6 +174,12 @@ lbl_hz_state.pack(anchor="w")
 s_hz = tk.Scale(left_col, from_=0.0, to=20.0, resolution=0.1, orient=tk.HORIZONTAL, command=update_hz, **scale_style)
 s_hz.set(10)
 s_hz.pack(pady=5)
+
+# Stereo Check
+tk.Frame(left_col, height=2, bg="#37474f").pack(fill="x", pady=15)
+tk.Label(left_col, text="STEREO CHECK", **lbl_style).pack(anchor="w")
+btn_test = tk.Button(left_col, text="START PING PONG", command=toggle_test, bg="#37474f", fg="#cfd8dc", bd=0, font=("Helvetica", 9))
+btn_test.pack(fill="x", pady=5)
 
 # === RIGHT COLUMN (Pulse & Vibe) ===
 right_col = tk.Frame(main_frame, bg="#263238")
