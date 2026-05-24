@@ -1,0 +1,26 @@
+# Reward ablation: NAIVE α-power maximisation.
+#
+# The proposal's original "α desync" idea, "maximise α". Has only one term - raw α band power.
+#
+# Run via:
+#   biolistener-sleep train --config configs/ablation_naive_alpha_max.yaml \
+#     --set training.seed=<N>
+
+training:
+  total_steps: 30000               # 5-min episodes -> ~25 episodes per seed
+  episode_s: 300                   # 5 min, matches sleep-onset latency
+  learning_rate: 3.0e-4
+  batch_size: 128
+  buffer_size: 50000
+  seed: 1
+  n_envs: 8                        # SubprocVecEnv - 8 parallel collectors on 16-core box
+
+env:
+  episode_s: 300
+  include_restfulness: false       # faster - skip MLModel call during ablation
+
+reward:
+  variant: naive_alpha_max
+
+mlflow:
+  experiment_name: reward_ablation_5min

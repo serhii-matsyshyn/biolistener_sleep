@@ -1,0 +1,26 @@
+# Reward ablation: NAIVE PLV-only with flat (un-band-weighted) entrainment.
+#
+# Rewards phase-locking value at ANY strobe frequency.
+#
+# Run via:
+#   biolistener-sleep train --config configs/ablation_naive_plv_only.yaml \
+#     --set training.seed=<N>
+
+training:
+  total_steps: 30000               # 5-min episodes -> ~25 episodes per seed
+  episode_s: 300
+  learning_rate: 3.0e-4
+  batch_size: 128
+  buffer_size: 50000
+  seed: 1
+  n_envs: 8
+
+env:
+  episode_s: 300
+  include_restfulness: false
+
+reward:
+  variant: naive_plv_only
+
+mlflow:
+  experiment_name: reward_ablation_5min

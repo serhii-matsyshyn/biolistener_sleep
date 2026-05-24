@@ -1,0 +1,105 @@
+# Daemon for real-hardware experiments - binds to all interfaces.
+#
+# Per-session params (subject_code, protocol, eeg_source, mask_target,
+# audio_enabled, protocol_params) come from the UI's session-create form.
+# Everything else here is daemon-wide default for every session it serves.
+
+daemon:
+  host: 0.0.0.0
+  port: 8000
+
+persistence:
+  mongo_url: mongodb://localhost:27017/
+  mongo_db: biolistener_sleep_prod
+
+eeg:
+  kind: biolistener            # UI overrides per-session via `eeg_source`
+  ip_address: 0.0.0.0          # bind to all interfaces; device dials in
+  ip_port: 12345
+  sampling_rate: 500
+  pga_gain: 8
+  # Channels physically wired to electrodes. Channels NOT in this list
+  # are disabled on the device (command 2, enable 0) so they don't stream
+  # noise/rail when nothing is plugged in. Default = all 8. The active
+  # `montage` (primary EEG + EOG + EMG channels) must be a subset of this.
+  active_channels: [0, 1, 2, 3, 4, 5, 6, 7]
+  montage: occipital_alpha
+  record_to_csv: true
+
+mask:
+  kind: esp32                  # UI overrides per-session via `mask_target`
+  ip_address: 0.0.0.0
+  port: 20000
+  strobe:
+    # Operator-set presentation params, NOT controlled by the RL policy.
+    # The agent owns frequency / duty / brightness; these own colour +
+    # which LEDs fire. Change these per study and every session inherits
+    # the same lighting geometry → reproducible.
+    color_hex: "#000000"       # RGB; '#000000' = no RGB, white-only via white_channel
+    white_channel: 255         # 0-255 white-LED brightness (independent of RGB)
+    led_bitmask: 0xFF          # 8-bit mask: which of the 8 LEDs fire. 0xFF = all on.
+
+audio:
+  enabled: true                # UI overrides per-session via `audio_enabled`
+  preset: sunlight_pads
+  initial_master_vol_pct: 80
+  # Makeup gain after master volume - pyo signal graph naturally peaks
+  # ~0.2-0.3, ~14 dB quieter than a peak-normalized .m4a played by VLC.
+  # 3.0 brings them roughly to parity; raise to 4-5 if still too quiet
+  # on your hardware, watch for clipping above ~5.
+  output_gain: 3.0
+  shaper:
+    # Deterministic master-volume + warmth curve. Replaces the agent's
+    # action[4] (master vol) with a drowsiness + time taper because the
+    # sim has no audio input model so the agent can't learn perceptual
+    # choices. Owned by app/audio/shaper.py, applied every control tick.
+    theta_alpha_baseline: 0.5      # θ/α below this: "alert", no shaping
+    theta_alpha_full: 3.0          # θ/α above this: "fully drowsy", endpoint values
+    warmth_at_baseline_pct: 80.0   # lowpass cutoff % when alert (bright)
+    warmth_at_full_pct: 25.0       # lowpass cutoff % when fully drowsy (dark)
+    initial_master_vol_pct: 50.0   # commanded master vol when alert + early session
+    drowsy_vol_taper: 0.4          # at full drowsy: vol = initial * (1 - 0.4)
+    end_fade_starts_at_frac: 0.75  # end-of-session fade begins at 75 % of duration_s
+    end_fade_min_factor: 0.4       # at session end: vol = pre-fade * 0.4
+  safety:
+    # Hard upper bounds on the engine. Independent of the perceptual
+    # shaper - these caps are enforced INSIDE BiofeedbackEngine.set_*
+    # so the signal chain physically cannot exceed them regardless of
+    # shaper output or agent action. Restart the daemon for changes
+    # to take effect.
+    max_val_vol: 1.5             # cap on pyo val_vol = (pct/100)*output_gain
+    max_strobe_depth_pct: 50.0   # cap on isochronic AM depth
+    max_binaural_vol_pct: 20.0   # cap on binaural-beat volume
+
+safety:
+  # Every bound here is now wired into SafetySupervisor via from_config.
+  # Defaults match defaults.yaml + the v1 module constants - override
+  # only what you need. Restart the daemon for YAML changes to take effect.
+  freq_min_hz: 3.0
+  freq_max_hz: 14.0
+  pse_band_lo: 15.0
+  pse_band_hi: 25.0
+  brightness_min: 0.0
+  brightness_max: 0.2
+  fill_min: 0.0
+  fill_max: 0.40
+  session_timeout_s: 2700         # 45 min hard cutoff
+  max_freq_step_hz_per_s: 4.0
+  max_brightness_step_per_s: 0.20
+  railed_pct_disconnect_threshold: 80.0
+
+policy:
+  name: sac
+  # Pinned to full_shaped seed=3 - the cohort winner per the sleep-task
+  # selection in notebooks/03_reward_ablation.ipynb. The higher-sac_eval
+  # seeds (1, 2) reward-hack at α-band instead of descending into θ.
+  checkpoint_path: app/agent/checkpoints/sac_full_shaped_seed3_1779578521.zip
+
+session:
+  # The daemon control loop does NOT auto-end at this mark - it ends on
+  # the operator's "End" / panic, on safety session_timeout (45 min hard
+  # cap), or on open_loop_track playback completion. duration_s is the
+  # *expected* session length and is used by the deterministic audio
+  # shaper to compute when to start the end-of-session master-volume
+  # taper (last 25% of duration_s by default).
+  duration_s: 900   # 15-minute session

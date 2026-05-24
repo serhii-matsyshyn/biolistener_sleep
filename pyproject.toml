@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biolistener-sleep"
+version = "0.8.1"
+description = "Closed-loop adaptive neuro-stimulation sleep system."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Serhii Matsyshyn" }]
+license = { text = "GNU General Public License v3.0 (GPL-3.0)" }
+
+# Runtime deps already live in requirements.txt; pyproject just publishes
+# the console script entry. `pip install -e .` makes `biolistener-sleep` available
+# on $PATH inside the venv.
+dependencies = []
+
+[project.scripts]
+biolistener-sleep = "app.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

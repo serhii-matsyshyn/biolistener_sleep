@@ -1,0 +1,16 @@
+# Project-wide defaults - committed to repo.
+# Layered AFTER schema defaults, BEFORE user profile / env / --set.
+# Override anything in this file with a profile under configs/*.yaml.
+
+persistence:
+  studies_root: studies
+  experimental_data_root: experimental_data
+  mongo_db: biolistener_sleep_dev
+
+# v1 conservative safety - raise these only with explicit study-protocol sign-off
+safety:
+  freq_min_hz: 3.0
+  freq_max_hz: 14.0
+  brightness_max: 0.60
+  fill_max: 0.40
+  session_timeout_s: 2700   # 45 min

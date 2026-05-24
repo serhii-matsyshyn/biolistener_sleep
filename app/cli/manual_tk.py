@@ -3,7 +3,6 @@ import sys
 import logging
 from pyo import *
 
-# Configure Logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('BiofeedbackSoundEngine')
 
@@ -14,12 +13,23 @@ class AudioServer:
     Responsible for booting, starting, and cleanly stopping the audio driver.
     """
 
-    def __init__(self, device_index=-1):
+    def __init__(self, device_index=None):
         self.device_index = device_index
         self.server = None
 
+    @staticmethod
+    def _pick_output_device():
+        names, indexes = pa_get_output_devices()
+        for preferred in ("pulse", "default"):
+            for name, idx in zip(names, indexes):
+                if preferred in name.lower():
+                    return idx
+        return -1
+
     def start(self):
         try:
+            if self.device_index is None:
+                self.device_index = self._pick_output_device()
             self.server = Server(nchnls=2, duplex=0, buffersize=1024)
             self.server.setOutputDevice(self.device_index)
             self.server.boot()
@@ -50,18 +60,15 @@ class BiofeedbackEngine:
     def __init__(self, preset_name="sunlight_pads"):
         self.preset_name = preset_name
 
-        # Control Signals (SigTo: The internal knobs)
         self.target_hz = SigTo(value=0, time=0.5, init=0)
         self.strobe_depth = SigTo(value=0, time=0.1, init=0)
         self.binaural_vol = SigTo(value=0, time=0.2, init=0)
         self.brown_vol = SigTo(value=0, time=0.5, init=0)
 
-        # Mixer & Effects Controls
         self.val_cutoff = SigTo(value=500, time=0.2, init=500)
         self.val_reverb = SigTo(value=0.8, time=0.2, init=0.8)
         self.val_vol = SigTo(value=0.5, time=0.2, init=0.5)
 
-        # Internal state for ping pong test
         self.test_beep_amp = SigTo(value=0, time=0.1, init=0)
 
         self._build_graph()
@@ -118,28 +125,22 @@ class BiofeedbackEngine:
         Connects the audio components:
         Source -> Textures -> Modulation -> Effects -> Output
         """
-        # Source Music
         self.raw_music = self._build_music_source(self.preset_name)
 
-        # Environmental Textures
-        # Pink Noise (Air)
         noise_lfo = Sine(freq=0.05, mul=200, add=400)
         pink_L = Biquad(PinkNoise(mul=0.03), freq=noise_lfo, q=1)
         pink_R = Biquad(PinkNoise(mul=0.03), freq=noise_lfo, q=1)
         self.stereo_pink = Sig([pink_L, pink_R])
 
-        # Brown Noise (Ground)
         brown_L = Biquad(BrownNoise(mul=self.brown_vol), freq=300, q=1)
         brown_R = Biquad(BrownNoise(mul=self.brown_vol), freq=300, q=1)
         self.stereo_brown = Sig([brown_L, brown_R])
 
-        # Stereo Tester (Ping Pong)
         ping_pong_clk = LFO(freq=0.25, type=2).range(-1, 1)
         test_freq = (ping_pong_clk * 200) + 600
         test_beep = Sine(freq=test_freq, mul=self.test_beep_amp)
         self.test_panned = Pan(test_beep, outs=2, pan=ping_pong_clk)
 
-        # Modulators (Isochronic & Binaural)
         pulse_wave = Sine(freq=self.target_hz, mul=0.5, add=0.5)
         final_modulator = (pulse_wave * self.strobe_depth) + (1 - self.strobe_depth)
         pulsing_music = self.raw_music * final_modulator
@@ -148,11 +149,10 @@ class BiofeedbackEngine:
         stereo_binaural = Sig([Sine(freq=carrier_freq, mul=self.binaural_vol),
                                Sine(freq=carrier_freq + self.target_hz, mul=self.binaural_vol)])
 
-        # Mixer & Effects
         filtered = Biquad(pulsing_music, freq=self.val_cutoff, q=0.5)
         chorused = Chorus(filtered, depth=0.9, feedback=0.4, bal=0.5)
 
-        # Mix textures BEFORE reverb
+        # Textures must mix in BEFORE reverb so the wet field includes them.
         texture_mix = chorused + self.stereo_pink + self.stereo_brown + self.test_panned
         music_layer = Freeverb(texture_mix, size=self.val_reverb, damp=0.8, bal=0.5)
 
@@ -241,15 +241,12 @@ class BiofeedbackUI:
         sys.exit()
 
     def _layout_ui(self):
-        # HEADER
         tk.Label(self.root, text="HYBRID BIOFEEDBACK SOUND ENGINE",
                  bg="#263238", fg="#80cbc4", font=("Helvetica", 16, "bold")).pack(pady=15)
 
-        # MAIN CONTAINER
         main_frame = tk.Frame(self.root, bg="#263238")
         main_frame.pack(expand=True, fill="both", padx=20)
 
-        # Left Column: Master & Frequency
         left_col = tk.Frame(main_frame, bg="#263238")
         left_col.grid(row=0, column=0, padx=20, sticky="n")
 
@@ -277,7 +274,6 @@ class BiofeedbackUI:
                                   bg="#37474f", fg="#cfd8dc", bd=0, font=("Helvetica", 9))
         self.btn_test.pack(fill="x", pady=5)
 
-        # Right Column: Pulse & Atmosphere
         right_col = tk.Frame(main_frame, bg="#263238")
         right_col.grid(row=0, column=1, padx=20, sticky="n")
 
@@ -318,7 +314,7 @@ class BiofeedbackUI:
 
 
 if __name__ == "__main__":
-    audio_server = AudioServer(device_index=-1)
+    audio_server = AudioServer()  # device_index=-1
     audio_server.start()
 
     # Available presets: "sunlight_pads", "warm_blanket", "lunar_bowls"
