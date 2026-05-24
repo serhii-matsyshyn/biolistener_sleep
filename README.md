@@ -2,7 +2,7 @@
 
 # BioListener Sleep: Closed-Loop Neural Stimulation System for Sleep Onset Optimization Using Deep Reinforcement Learning
 
-A real-time closed-loop neuro-stimulation system that adapts audio-visual entrainment to the subject's live EEG, with the goal of guiding the brain into sleep-onset (N1) as fast as possible. The system is built on top of the [BioListener](https://github.com/serhii-matsyshyn/biolistener) EEG board and a stroboscopic LED mask driven over the network from a Python daemon.
+A real-time closed-loop neuro-stimulation system that adapts audio-visual entrainment to the subject's live EEG, with the goal of guiding the brain into sleep-onset (N1) as fast as possible. The system is built on top of the [BioListener](https://github.com/serhii-matsyshyn/biolistener) EEG board and a stroboscopic LED mask (firmware: [biolistener_sleep_mask_firmware](https://github.com/serhii-matsyshyn/biolistener_sleep_mask_firmware)) driven over the network from a Python daemon.
 
 The research contribution of this project is **reward design for closed-loop adaptive visual-auditory stimulation (AVS)** under a constrained-RL setting. We train Soft Actor-Critic (SAC) policies against a domain-randomised neural-mass simulator and show empirically that naive rewards from the AVS literature are exploited by the policy, while a band-weighted PLV + descent-shaped reward produces sleep-conducive trajectories that generalise across simulated subjects.
 
