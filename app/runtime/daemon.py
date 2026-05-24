@@ -28,8 +28,9 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -69,6 +70,7 @@ from app.open_loop_track.csv_playback import CsvEventPlayback
 from app.open_loop_track.playback import OpenLoopTrackPlayback
 from app.open_loop_track.policy import OpenLoopTrackPolicy
 from app.persistence.mongo import get_db, init_indexes
+from app.persistence.timeseries import write_audio_seed
 from app.persistence.schema import (
     AgentDecision, Session as SessionDoc, SessionProtocol,
     SessionStatus, Subject, has_contraindications,
@@ -452,6 +454,12 @@ class _EegHandle:
     sim: Optional[InProcessBrainSim] = None
     ingestor: Optional[EEGIngestor] = None
     nmm_device: Optional[NMMBioListenerDevice] = None
+    # Optional sim raw-EEG recorder. Mirrors BrainFlow's add_streamer
+    # tab-separated layout (rows=samples, cols=channels) so the post-
+    # session notebook reads sim and real recordings with the same code.
+    # Opened in _setup_eeg when the session has a folder; closed in the
+    # control_loop's `finally`.
+    sim_csv_fh: Optional[Any] = None
 
 
 def _parse_eeg_source(spec: str) -> tuple[str, str, int]:
@@ -553,7 +561,19 @@ def _setup_eeg(sess: Session, cfg: EnvConfig
         seed=subject.seed,
     )
     sim = InProcessBrainSim(brain=brain, photic_config=subject.photic_config)
-    return _EegHandle(kind="sim", sim=sim), sim_meta
+    # Mirror BrainFlow's `add_streamer("file://...")` for the real path
+    # so the post-session notebook treats sim and real runs identically.
+    # Layout: tab-separated, no header, rows=samples, one column per
+    # channel (col 0 = timestamp µs for parity, cols 1..8 = EEG).
+    sim_fh = None
+    if sess.folder is not None:
+        try:
+            sim_fh = (sess.folder / "raw_eeg.csv").open("w", buffering=1 << 16)
+        except Exception:
+            logger.warning("raw_eeg.csv open failed for sim session",
+                           exc_info=True)
+            sim_fh = None
+    return _EegHandle(kind="sim", sim=sim, sim_csv_fh=sim_fh), sim_meta
 
 
 def _setup_mask(sess: Session) -> tuple[MaskClient, Optional[VirtualMaskServer]]:
@@ -755,12 +775,31 @@ async def _read_window(handle: _EegHandle, buf: np.ndarray,
     """
     if handle.kind == "sim":
         assert handle.sim is not None
-        for _ in range(n_samples_per_tick):
+        new_samples = np.empty((8, n_samples_per_tick), dtype=np.float64)
+        for i in range(n_samples_per_tick):
             sample = handle.sim.step()
             buf[:, buf_pos] = sample
+            new_samples[:, i] = sample
             buf_pos = (buf_pos + 1) % buf.shape[1]
             if buf_pos == 0:
                 buf_filled = True
+        # Stream the tick's new samples to raw_eeg.csv when recording.
+        # Format mirrors BrainFlow's add_streamer: tab-separated, no header,
+        # col 0 = monotonic µs timestamp, cols 1..8 = EEG channels.
+        if handle.sim_csv_fh is not None:
+            try:
+                # InProcessBrainSim's `_t` is the sim's monotonic clock in s.
+                base_us = int(getattr(handle.sim, "_t", 0.0) * 1_000_000)
+                step_us = int(1_000_000 / cfg.sampling_rate)
+                lines = []
+                for i in range(n_samples_per_tick):
+                    ts = base_us + i * step_us
+                    cols = [str(ts)] + [f"{v:.6g}" for v in new_samples[:, i]]
+                    lines.append("\t".join(cols))
+                handle.sim_csv_fh.write("\n".join(lines) + "\n")
+            except Exception:
+                # Don't let recording faults stop the control loop.
+                pass
         if buf_filled:
             window = np.concatenate(
                 [buf[:, buf_pos:], buf[:, :buf_pos]], axis=1,
@@ -799,6 +838,22 @@ async def _control_loop(sess: Session) -> None:
 
     if sim_meta:
         sess.brain_sim_params = sim_meta  # persisted on session document
+
+    # Dump every RNG seed we know about into audio_seed.json. Used by the
+    # replay path and surfaced in the post-session notebook so the operator
+    # can prove the run is reproducible. Best-effort - never block the loop.
+    if sess.folder is not None:
+        try:
+            seed_doc = {
+                "session_id": sess.session_id,
+                "subject_code": sess.subject_code,
+                "eeg_source": sess.eeg_source,
+                "sim_meta": sim_meta,
+                "server_start_ts": datetime.utcnow().isoformat() + "Z",
+            }
+            write_audio_seed(sess.folder, seed_doc)
+        except Exception:
+            logger.warning("write_audio_seed failed", exc_info=True)
 
     logger.info(
         "Session %s control loop: protocol=%s eeg=%s mask=%s audio=%s",
@@ -1090,18 +1145,47 @@ async def _control_loop(sess: Session) -> None:
                 "brightness": safe.brightness,
                 "color_white": safe.color_white,
             })
+            # Raw policy output + decoded request + post-clamp value.
+            # `action` is the SAC's [-1, 1] vector before any decode/clamp.
+            # `stim_action` is the deployment-decoder's pre-clamp request.
+            # `safe` is what physically went to the mask. The diff between
+            # stim_action.* and safe.* is exactly the safety-supervisor's
+            # contribution per tick - that's the data the safety-overlay
+            # figure in the post-session notebook draws from.
+            sess.writer.add_action({
+                "session_id": sess.session_id, "t_ms": t_ms,
+                "action_freq_raw": float(action[0]),
+                "action_fill_raw": float(action[1]),
+                "action_brightness_raw": float(action[2]),
+                "request_freq_hz": float(stim_action.frequency_hz),
+                "request_fill": float(stim_action.fill),
+                "request_brightness": float(stim_action.brightness),
+                "safe_freq_hz": float(safe.frequency_hz),
+                "safe_fill": float(safe.fill),
+                "safe_brightness": float(safe.brightness),
+                "reward": float(sess.last_reward),
+            })
 
             await _broadcast(sess.session_id, sess.telemetry_snapshot())
 
             new_evts = sess.supervisor.events[-3:]
             for e in new_evts:
+                evt_row = {
+                    "session_id": sess.session_id, "t_ms": e.t_ms,
+                    "kind": e.kind, "field": e.field,
+                    "before": e.before, "after": e.after,
+                    "reason": e.reason,
+                }
+                # Filesystem first - it works even without Mongo, and the
+                # post-session notebook reads it as the canonical source
+                # for the safety-event timeline figure.
                 try:
-                    await db.safety_events.insert_one({
-                        "session_id": sess.session_id, "t_ms": e.t_ms,
-                        "kind": e.kind, "field": e.field,
-                        "before": e.before, "after": e.after,
-                        "reason": e.reason,
-                    })
+                    sess.writer.append_safety_event(evt_row)
+                except Exception:
+                    logger.warning("safety_events.jsonl append failed",
+                                   exc_info=True)
+                try:
+                    await db.safety_events.insert_one(evt_row)
                 except Exception:
                     pass
 
@@ -1155,6 +1239,11 @@ async def _control_loop(sess: Session) -> None:
         if eeg_handle.nmm_device is not None:
             eeg_handle.nmm_device.stop()
             eeg_handle.nmm_device.join(timeout=2)
+        if eeg_handle.sim_csv_fh is not None:
+            try:
+                eeg_handle.sim_csv_fh.close()
+            except Exception:
+                pass
         if audio_file_player is not None:
             try:
                 audio_file_player.stop()

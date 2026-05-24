@@ -104,6 +104,7 @@ class SessionWriter:
         self._stim_buf: List[dict] = []
         self._feat_buf: List[dict] = []
         self._audio_buf: List[dict] = []
+        self._action_buf: List[dict] = []
 
     def add_stim(self, row: dict) -> None:
         self._stim_buf.append(row)
@@ -120,6 +121,23 @@ class SessionWriter:
         if len(self._audio_buf) >= self.flush_every:
             self.flush_audio()
 
+    def add_action(self, row: dict) -> None:
+        """Log a per-tick agent action: the raw [-1, 1] policy output,
+        the decoded request (Hz / fill / brightness), and the final
+        post-clamp commanded value."""
+        self._action_buf.append(row)
+        if len(self._action_buf) >= self.flush_every:
+            self.flush_actions()
+
+    def append_safety_event(self, row: dict) -> Path:
+        """Append a single safety-clamp event to safety_events.jsonl.
+        Streams immediately (no buffering) - clamp events are rare and
+        the operator wants to see them in the file the moment they fire."""
+        out = self.folder / "safety_events.jsonl"
+        with out.open("a") as fh:
+            fh.write(json.dumps(row) + "\n")
+        return out
+
     def flush_stim(self) -> None:
         if self._stim_buf:
             append_parquet(self.folder, "stim_log.parquet", self._stim_buf)
@@ -135,7 +153,13 @@ class SessionWriter:
             append_parquet(self.folder, "audio_events.parquet", self._audio_buf)
             self._audio_buf.clear()
 
+    def flush_actions(self) -> None:
+        if self._action_buf:
+            append_parquet(self.folder, "agent_action.parquet", self._action_buf)
+            self._action_buf.clear()
+
     def flush_all(self) -> None:
         self.flush_stim()
         self.flush_features()
         self.flush_audio()
+        self.flush_actions()
