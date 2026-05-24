@@ -37,7 +37,9 @@ mask:
     # the same lighting geometry → reproducible.
     color_hex: "#000000"       # RGB; '#000000' = no RGB, white-only via white_channel
     white_channel: 255         # 0-255 white-LED brightness (independent of RGB)
-    led_bitmask: 0xFF          # 8-bit mask: which of the 8 LEDs fire. 0xFF = all on.
+    # Per-LED enable, ordered LED 0 → LED 7 (1 = on, 0 = off).
+    # Legacy 8-bit int form (0xFF / 255 / "11111111") is still accepted.
+    leds: [1, 1, 1, 1, 1, 1, 1, 1]
 
 audio:
   enabled: true                # UI overrides per-session via `audio_enabled`

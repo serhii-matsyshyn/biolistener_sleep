@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _Section(BaseModel):
@@ -99,14 +99,50 @@ class MaskStrobeConfig(_Section):
             "white only by setting color_hex='#000000' + white_channel=200."
         ),
     )
-    led_bitmask: int = Field(
-        default=0xFF, ge=0, le=0xFF,
+    leds: List[int] = Field(
+        default_factory=lambda: [1] * 8,
         description=(
-            "Which of the 8 LED rings fire. 8-bit mask, 1 = on. "
-            "0xFF = all 8 on (default), 0b00111100 (=60) = central 4 only. "
-            "YAML accepts '0xFF', '255', '0b11111111' interchangeably."
+            "Which of the 8 LED rings fire. List of 8 ints (0 = off, 1 = on), "
+            "ordered LED 0 → LED 7. Examples:\n"
+            "  [1,1,1,1,1,1,1,1]  - all 8 on (default)\n"
+            "  [0,0,1,1,1,1,0,0]  - central 4 only\n"
+            "  [1,0,1,0,1,0,1,0]  - alternating\n"
+            "Legacy int form (0xFF / 255 / 0b11111111) is still accepted."
         ),
     )
+
+    @field_validator("leds", mode="before")
+    @classmethod
+    def _normalize_leds(cls, v):
+        """Accept three input shapes:
+        (1) list[int] of length 8 with 0/1 - the new canonical form.
+        (2) int 0..255 - legacy 8-bit bitmask, LSB = LED 0.
+        (3) str of 8 chars '0'/'1' - convenience for YAML one-liners.
+        All collapse to the canonical list[int]."""
+        if isinstance(v, int):
+            if not 0 <= v <= 0xFF:
+                raise ValueError(f"led bitmask int {v!r} not in 0..255")
+            return [(v >> i) & 1 for i in range(8)]
+        if isinstance(v, str):
+            if len(v) != 8 or any(c not in "01" for c in v):
+                raise ValueError(
+                    f"led string {v!r} must be 8 chars of '0'/'1' "
+                    "(LSB first, e.g. '11111111' for all on)"
+                )
+            return [int(c) for c in v]
+        if isinstance(v, list):
+            if len(v) != 8 or any(int(x) not in (0, 1) for x in v):
+                raise ValueError(
+                    f"led list {v!r} must be 8 ints, each 0 or 1"
+                )
+            return [int(x) for x in v]
+        raise TypeError(f"unsupported led spec: {type(v).__name__}")
+
+    @property
+    def led_bitmask(self) -> int:
+        """Convert the canonical list form to the wire-format 8-bit
+        bitmask the mask client sends. LED i contributes bit i (LSB first)."""
+        return sum(bool(b) << i for i, b in enumerate(self.leds))
 
 
 class MaskConfig(_Section):
