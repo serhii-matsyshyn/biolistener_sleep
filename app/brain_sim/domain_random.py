@@ -38,6 +38,13 @@ class RandomizationRanges:
     p_std_range: tuple = (15.0, 30.0)          # noise level
     non_responder_prob: float = 0.10            # ~10% of subjects don't entrain
 
+    # Ablation hook. When set, overrides PhoticInputConfig.shift_per_unit_ratio
+    # on every sampled subject. 0.0 disables the state-dependent resonance
+    # shift entirely, which is how we test whether a learned descent depends
+    # on that modelling assumption. Applied AFTER all RNG draws, so the
+    # subject sequence for a given seed is bit-identical either way.
+    shift_per_unit_ratio_override: Optional[float] = None
+
     def sample(self, seed: Optional[int] = None) -> SubjectSample:
         rng = np.random.default_rng(seed)
         alpha_hz = float(rng.uniform(*self.alpha_hz_range))
@@ -60,6 +67,10 @@ class RandomizationRanges:
             base_resonance_hz=alpha_hz,
             resonance_width_hz=resonance_width,
         )
+        # No RNG below this line - the override must not perturb the draw
+        # sequence, so ablation and baseline see identical subjects.
+        if self.shift_per_unit_ratio_override is not None:
+            photic.shift_per_unit_ratio = float(self.shift_per_unit_ratio_override)
         return SubjectSample(
             seed=int(seed if seed is not None else rng.integers(0, 2**31)),
             alpha_hz=alpha_hz,

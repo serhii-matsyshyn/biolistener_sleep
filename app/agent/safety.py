@@ -69,7 +69,13 @@ BRIGHTNESS_MAX_V1 = 0.60
 FILL_MIN = 0.0
 FILL_MAX = 0.40
 DEFAULT_SESSION_TIMEOUT_S = 45 * 60
-MAX_FREQ_STEP_HZ_PER_S = 4.0
+# Ramping stimulation parameters rather than stepping them is standard
+# practice in audio-visual entrainment protocols, recommended to reduce
+# "startle and fatigue" (Rahmani, Romero Lauro & Pisoni 2025, Brain Sci
+# 15(10):1070, doi:10.3390/brainsci15101070). No published rate exists for
+# photic frequency transitions, so this value is a conservative engineering
+# choice.
+MAX_FREQ_STEP_HZ_PER_S = 0.5
 MAX_BRIGHTNESS_STEP_PER_S = 0.20  # i.e. 20%/s
 RAILED_PCT_DISCONNECT_THRESHOLD = 80.0
 
@@ -160,6 +166,11 @@ class SafetySupervisor:
     max_brightness_step_per_s: float = MAX_BRIGHTNESS_STEP_PER_S
     railed_pct_disconnect_threshold: float = RAILED_PCT_DISCONNECT_THRESHOLD
     on_event: Optional[Callable[[SafetyEvent], None]] = None
+    # Fixed inter-action interval, in seconds, for ramp-rate limiting.
+    # None (default) = derive dt from wall clock, correct for live sessions.
+    # Set to 1 / tick_hz when driving a simulated clock so the limiter
+    # enforces its documented rate and rollouts are reproducible.
+    tick_dt_s: Optional[float] = None
 
     _events: List[SafetyEvent] = field(default_factory=list)
     _last_action: Optional[StimAction] = None
@@ -286,10 +297,21 @@ class SafetySupervisor:
                       result.brightness, new_bri, "brightness_bounds")
         result.brightness = new_bri
 
-        # 7) Ramp-rate limits relative to last applied action
+        # 7) Ramp-rate limits relative to last applied action.
+        #
+        # dt is wall-clock by default, which is correct for a live session
+        # driven in real time. In simulation the loop runs far faster than
+        # real time, so wall-clock dt would (a) make the limiter permit only
+        # a fraction of its documented rate and (b) make results depend on
+        # machine speed. Callers running against a simulated clock pass
+        # ``tick_dt_s`` (e.g. 1 / tick_hz) to get the intended rate and
+        # reproducible trajectories.
         now_wall = time.time()
         if self._last_action is not None:
-            dt = max(1e-3, now_wall - self._last_action_t)
+            if self.tick_dt_s is not None:
+                dt = float(self.tick_dt_s)
+            else:
+                dt = max(1e-3, now_wall - self._last_action_t)
             max_df = self.max_freq_step_hz_per_s * dt
             req_df = result.frequency_hz - self._last_action.frequency_hz
             if abs(req_df) > max_df:

@@ -260,7 +260,7 @@ class SafetyConfig(_Section):
     fill_max: float = Field(default=0.40, ge=0.0, le=1.0)
     session_timeout_s: float = Field(default=45 * 60, ge=10.0,
                                        description="Hard session timeout in seconds.")
-    max_freq_step_hz_per_s: float = Field(default=4.0, ge=0.1)
+    max_freq_step_hz_per_s: float = Field(default=0.5, ge=0.1)
     max_brightness_step_per_s: float = Field(default=0.20, ge=0.01,
                                                 description="20% per second default.")
     railed_pct_disconnect_threshold: float = Field(default=80.0, ge=0.0, le=100.0)

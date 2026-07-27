@@ -83,6 +83,7 @@ def rollout_episodes(
                 "sigma":             float(feats.sigma_pwr),
                 "theta_alpha_ratio": float(feats.theta_alpha_ratio),
                 "plv":               float(info["plv"]),
+                "plv_2f":            float(info.get("plv_2f", 0.0)),
                 "reward":            float(reward),
             })
 
@@ -113,5 +114,8 @@ def summary(df: pd.DataFrame) -> dict:
         "mean_final_theta_alpha":   float(by_ep["final_ratio"].mean()),
         "mean_final_strobe_hz":     float(by_ep["final_strobe"].mean()),
         "std_final_strobe_hz":      float(by_ep["final_strobe"].std()),
+        "median_final_strobe_hz":   float(by_ep["final_strobe"].median()),
+        "frac_final_below_6hz":     float((by_ep["final_strobe"] < 6.0).mean()),
+        "frac_final_below_8hz":     float((by_ep["final_strobe"] < 8.0).mean()),
         "mean_plv":                 float(by_ep["mean_plv"].mean()),
     }

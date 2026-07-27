@@ -86,7 +86,7 @@ safety:
   fill_min: 0.0
   fill_max: 0.40
   session_timeout_s: 2700         # 45 min hard cutoff
-  max_freq_step_hz_per_s: 4.0
+  max_freq_step_hz_per_s: 0.5
   max_brightness_step_per_s: 0.20
   railed_pct_disconnect_threshold: 80.0
 

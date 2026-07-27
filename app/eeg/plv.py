@@ -105,3 +105,41 @@ def plv_strobe_to_eeg(
     DataFilter.perform_bandpass(env, sampling_rate, lo, hi, 4,
                                 FilterTypes.BUTTERWORTH_ZERO_PHASE.value, 0)
     return plv(eeg, env)
+
+
+def plv_strobe_harmonic(
+    eeg_channel: np.ndarray,
+    strobe_envelope: np.ndarray,
+    sampling_rate: int,
+    strobe_freq_hz: float,
+    harmonic: int = 2,
+    bandwidth_hz: float = 2.0,
+) -> float:
+    """
+    PLV between EEG and strobe envelope at an integer harmonic of the
+    strobe frequency.
+
+    A square strobe with duty cycle != 50 % carries real power at 2f, and
+    photic driving is known to produce harmonic responses, so entrainment
+    can be present at 2f while the fundamental band looks quiet. The
+    fundamental-only measurement in :func:`plv_strobe_to_eeg` cannot see
+    that.
+
+    Reporting f and 2f side by side also helps separate genuine neural
+    entrainment from stimulus-locked contamination on real hardware: a
+    photoelectric or photomyogenic artifact tracks the drive waveform's
+    own harmonic structure, whereas a neural response need not.
+
+    This is a **diagnostic** measure. It is deliberately kept out of the
+    observation vector and the reward so that trained policies remain
+    comparable across it.
+    """
+    if harmonic < 1:
+        raise ValueError("harmonic must be >= 1")
+    return plv_strobe_to_eeg(
+        eeg_channel,
+        strobe_envelope,
+        sampling_rate,
+        strobe_freq_hz * harmonic,
+        bandwidth_hz=bandwidth_hz,
+    )

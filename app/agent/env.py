@@ -53,7 +53,7 @@ from app.eeg.features import (
     FEATURE_NAMES, FeatureSnapshot, extract_features, feature_vector,
 )
 from app.eeg.montage import OCCIPITAL_ALPHA, Montage
-from app.eeg.plv import plv_strobe_to_eeg
+from app.eeg.plv import plv_strobe_to_eeg, plv_strobe_harmonic
 
 logger = logging.getLogger("agent.env")
 
@@ -159,7 +159,12 @@ class SleepOnsetEnv(gym.Env):
             brain=brain, photic_config=sampled.photic_config,
             session_duration_s=self.config.episode_s,
         )
-        self._supervisor = SafetySupervisor()
+        # Simulated clock: one env step advances 1 / tick_hz of *simulated*
+        # time regardless of how fast the loop actually runs, so the ramp
+        # limiter must be told that rather than reading time.time().
+        self._supervisor = SafetySupervisor(
+            tick_dt_s=1.0 / self.config.tick_hz,
+        )
         self._audio = AudioController(engine=None)
         self._strobe = StrobeParams()
         n_buf = int(self.config.window_s * self.config.sampling_rate)
@@ -235,6 +240,7 @@ class SleepOnsetEnv(gym.Env):
         info = {
             "features": features,
             "plv": plv_val,
+            "plv_2f": self._plv_harmonic(2),
             "stim": safe,
             "t": self._t,
         }
@@ -347,4 +353,34 @@ class SleepOnsetEnv(gym.Env):
         )
         return plv_strobe_to_eeg(
             eeg, env, self.config.sampling_rate, self._strobe.frequency_hz,
+        )
+
+    def _plv_harmonic(self, harmonic: int = 2,
+                      window: Optional[np.ndarray] = None) -> float:
+        """Diagnostic PLV at a harmonic of the strobe frequency.
+
+        Report-only: never enters the observation vector or the reward, so
+        adding it leaves trained policies bit-identical.
+        """
+        if window is None:
+            if self._buf_filled:
+                window = np.concatenate(
+                    [self._buf[:, self._buf_pos:],
+                     self._buf[:, :self._buf_pos]],
+                    axis=1,
+                )
+            else:
+                return 0.0
+        if not self._strobe.enabled or self._strobe.frequency_hz <= 0:
+            return 0.0
+        primary = self.config.montage.primary_eeg_channels[0]
+        eeg = window[primary].copy()
+        env = strobe_envelope(
+            duration_s=window.shape[1] / self.config.sampling_rate,
+            dt=1.0 / self.config.sampling_rate,
+            strobe=self._strobe,
+        )
+        return plv_strobe_harmonic(
+            eeg, env, self.config.sampling_rate, self._strobe.frequency_hz,
+            harmonic=harmonic,
         )
