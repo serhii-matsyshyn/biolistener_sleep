@@ -6,8 +6,36 @@ mask UDP client or audio engine. Every clamp is logged as a
 ``SafetyEvent`` for the session record so the thesis can defend the
 exact actions that ever reached the user.
 
-Enforced rules (proposal §4.B + Royal College of Ophthalmologists PSE
-guidance + Harding et al.):
+Enforced rules (proposal §4.B + photosensitive-epilepsy (PSE) guidance):
+
+  Fisher et al. (2022) "Visually sensitive seizures: an updated review by
+    the Epilepsy Foundation", Epilepsia 63(4):739-768.
+    doi:10.1111/epi.17175                      <- current consensus
+  Harding et al. (2005) "Photic- and pattern-induced seizures: expert
+    consensus of the Epilepsy Foundation of America Working Group",
+    Epilepsia 46(9):1423-1425. doi:10.1111/j.1528-1167.2005.31305.x
+  Fisher et al. (2005), Epilepsia 46(9):1426-1441 - companion review.
+    doi:10.1111/j.1528-1167.2005.31405.x
+  Standards envelope: Ofcom Broadcasting Code guidance (UK, successor to
+    the ITC), ISO 9241-391, ITU-R BT.1702-3, W3C WCAG 2.x SC 2.3.1.
+
+Known limits of this guard - please read before running a human session:
+
+1. Brightness is uncalibrated. Harding's flash criteria are conjunctive
+   (luminance >=20 cd/m^2 AND >=3 Hz AND solid angle >=0.006 sr), and a
+   mask on closed eyelids always meets the frequency and solid-angle
+   limbs, so luminance carries the margin.
+
+2. Colour is not constrained here. Harding adds a luminance-independent
+   criterion - a transition to or from saturated red is itself a risk -
+   and the mask's RGBW is operator-set via ``mask.strobe.*``, outside
+   this module.
+
+3. The operating band sits inside the hazard range. [15, 25] Hz is the
+   peak-risk window this module hard-blocks, but the reported hazard
+   range is wider (Fisher 2022: 3-60 Hz). Operating at 3-14 Hz is
+   justified on dose grounds - luminance and duty cycle - rather than on
+   frequency alone.
 
 - Strobe frequency clipped to [3.0, 14.0] Hz steady-state.
   **15–25 Hz is the highest-risk PSE band** and is hard-blocked

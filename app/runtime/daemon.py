@@ -1070,7 +1070,7 @@ async def _control_loop(sess: Session) -> None:
             if eeg_handle.kind == "sim" and eeg_handle.sim is not None:
                 eeg_handle.sim.update_strobe(StrobeParams(
                     enabled=safe.enabled, frequency_hz=safe.frequency_hz,
-                    fill=safe.fill, brightness=safe.brightness, color="white",
+                    fill=safe.fill, brightness=safe.brightness,
                 ))
             # Apply to the mask (virtual or real ESP32). RGB+W colour and
             # LED bitmask are operator-set in `mask.strobe.*` (parsed

@@ -134,7 +134,6 @@ class NMMBioListenerDevice(threading.Thread):
                 frequency_hz=strobe.frequency_hz,
                 fill=strobe.fill,
                 brightness=strobe.brightness,
-                color=strobe.color,
             )
 
     def stop(self) -> None:

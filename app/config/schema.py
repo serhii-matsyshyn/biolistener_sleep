@@ -423,11 +423,15 @@ class RandomizationRangesConfig(_Section):
 
 
 class PhoticConfig(_Section):
-    eyelid_transmission: Dict[str, float] = Field(
-        default_factory=lambda: {
-            "red": 0.02, "green": 0.15, "blue": 0.30, "white": 0.10,
-        },
-        description="Bierman 2008 closed-eyelid spectral transmission per color.",
+    eyelid_transmission: float = Field(
+        default=0.10,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Nominal broadband fraction of mask light reaching the retina "
+            "through a closed eyelid. Degenerate with cortical_gain, which "
+            "domain randomization already sweeps."
+        ),
     )
     cortical_gain_default: float = Field(default=400.0)
     base_resonance_hz_default: float = Field(default=10.0)

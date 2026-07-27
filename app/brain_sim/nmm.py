@@ -63,7 +63,7 @@ class JansenRitParams:
 
 
 def _sigmoid(v: np.ndarray, e0: float, r: float, v0: float) -> np.ndarray:
-    """Wave-to-pulse sigmoid (Jansen-Rit eq. 8)."""
+    """Wave-to-pulse sigmoid (Jansen-Rit eq. 3)."""
     return 2.0 * e0 / (1.0 + np.exp(r * (v0 - v)))
 
 

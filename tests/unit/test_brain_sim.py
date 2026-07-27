@@ -94,7 +94,7 @@ def test_photic_input_shifts_spectrum_towards_strobe_freq():
         resonance_width_hz=3.0,
     )
     strobe = StrobeParams(enabled=True, frequency_hz=6.0,
-                          fill=0.3, brightness=0.5, color="white")
+                          fill=0.3, brightness=0.5)
 
     def photic_fn(t: float) -> float:
         return strobe_to_cortical_input(t, strobe, config)

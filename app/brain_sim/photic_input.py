@@ -2,19 +2,32 @@
 Map strobe parameters -> cortical photic-drive current for the NMM.
 
 Models three effects:
-  1. Eyelid spectral attenuation - closed-eye transmission is highly
-     wavelength-dependent. Bierman (2008) and Robinson & Kertesz (1974)
-     report ~98% attenuation at red wavelengths, ~70% at blue, ~85% at green.
+  1. Eyelid attenuation - only a fraction of the mask's light reaches the
+     retina through a closed lid. Modelled as a single broadband scalar
+     (see ``EYELID_TRANSMISSION``); the mask is driven white-only, so no
+     per-wavelength model is needed.
   2. Strobe envelope -> effective cortical input. A square strobe at
      frequency f with duty cycle d delivers a periodic input whose
-     amplitude scales with brightness and (1 - eyelid_attenuation).
+     amplitude scales with brightness and the eyelid transmission.
   3. **State-dependent resonance** - in the awake α-dominant state the
      cortex entrains best near individual α (~10 Hz). As drowsiness rises
      (θ/α ratio grows), thalamocortical neurons shift from tonic into a
-     burst-firing mode whose preferred entrainment frequency drops into
-     θ/δ bands (Steriade et al., Bal & McCormick 1996, Hindriks & van
-     Putten 2013). We model this as a downward shift of the resonance
-     peak proportional to current drowsiness, clipped to θ-low.
+     burst-firing mode. We model this as a downward shift of the photic
+     resonance peak proportional to current drowsiness, clipped to θ-low.
+
+     The tonic/burst switch is well established:
+       Steriade, McCormick & Sejnowski (1993) Science 262:679-685,
+         doi:10.1126/science.8235588
+       Bal & McCormick (1996) Neuron 17:297-308,
+         doi:10.1016/S0896-6273(00)80161-0
+       Hindriks & van Putten (2013) NeuroImage 70:150-163,
+         doi:10.1016/j.neuroimage.2012.12.018
+       Schellenberger Costa et al. (2016) PLoS Comput Biol 12(9):e1005022,
+         doi:10.1371/journal.pcbi.1005022
+     Coupling that switch to the *photic entrainment* peak is a modelling
+     choice of this simulator, not a measured frequency-response curve.
+     ``shift_per_unit_ratio`` is therefore a free parameter; set it to 0
+     to disable the state-dependent shift entirely.
 
 This is the simplest physiologically defensible mapping: amplitude-
 modulated input current to the EI population with a state-dependent
@@ -28,13 +41,21 @@ from typing import Tuple
 import numpy as np
 
 
-# Bierman 2008 closed-eyelid spectral transmission (approximate)
-EYELID_TRANSMISSION = {
-    "red":   0.02,   # ~98% attenuated
-    "green": 0.15,
-    "blue":  0.30,   # ~70% attenuated
-    "white": 0.10,   # broadband, dominated by red attenuation
-}
+# Nominal broadband transmission of the closed eyelid: the fraction of
+# commanded mask light assumed to reach the retina.
+#
+# This is a modelling placeholder, not a measured constant. It enters the
+# drive only as `brightness * EYELID_TRANSMISSION * cortical_gain`, so it is
+# mathematically degenerate with `PhoticInputConfig.cortical_gain` - and
+# cortical_gain is domain-randomized over a 7x range (see
+# `RandomizationRanges.cortical_gain_range`), which subsumes any plausible
+# value here. Changing this number rescales the subject distribution; it does
+# not add information the agent can exploit.
+#
+# A per-wavelength model would need real calibration (the published eyelid
+# transmittance curves are strongly wavelength-dependent) and is pointless
+# while the mask is driven white-only.
+EYELID_TRANSMISSION = 0.10
 
 
 @dataclass
@@ -44,14 +65,16 @@ class StrobeParams:
     frequency_hz: float = 10.0
     fill: float = 0.2          # duty cycle 0..1
     brightness: float = 0.3    # 0..1
-    color: str = "white"       # "red" | "green" | "blue" | "white"
 
     def effective_amplitude(self) -> float:
-        """Brightness * (light reaching retina through closed eyelid)."""
+        """Brightness * (light reaching retina through closed eyelid).
+
+        The mask's RGBW colour is operator-set hardware configuration
+        (``mask.strobe.*``), not a policy knob, so it plays no part here.
+        """
         if not self.enabled:
             return 0.0
-        transmission = EYELID_TRANSMISSION.get(self.color, 0.10)
-        return self.brightness * transmission
+        return self.brightness * EYELID_TRANSMISSION
 
 
 @dataclass
@@ -149,8 +172,24 @@ def vigilance_drift(
     Background drift mimicking falling-asleep over a session.
 
     Returns (p_mean_multiplier, p_std_multiplier) for the NMM. Arousal drops
-    monotonically over the session, modeling reduced ascending reticular
-    activation (Hindriks & van Putten 2013-style sleep transition).
+    monotonically over the session, modeling reduced ascending arousal drive:
+
+      Phillips & Robinson (2007) J Biol Rhythms 22(2):167-179,
+        doi:10.1177/0748730406297512 - mean-field model of the brainstem
+        ascending arousal system.
+      Robinson, Rennie & Rowe (2002) Phys Rev E 65:041924,
+        doi:10.1103/PhysRevE.65.041924 - arousal as a trajectory through a
+        low-dimensional parameter space, passing the δ/θ/α resonances.
+      Weigenand et al. (2014) PLoS Comput Biol 10(11):e1003923,
+        doi:10.1371/journal.pcbi.1003923 - wake -> deep sleep as a
+        parameter change in a neural mass cortex.
+      Hindriks & van Putten (2013), doi:10.1016/j.neuroimage.2012.12.018 -
+        the resulting α amplitude / frequency changes.
+
+    SIMPLIFICATION: the same scalar is returned for both the mean-drive and
+    the noise multiplier. This is a deliberate simplification - Weigenand
+    et al. (2014) treats cortical noise as independent of the slow
+    modulatory drift, so the two could be decoupled if needed.
 
     Wired in `InProcessBrainSim.step()` so the brain's background drive
     decays over the session, organically raising θ/α. This is the

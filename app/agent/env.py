@@ -202,7 +202,6 @@ class SleepOnsetEnv(gym.Env):
             frequency_hz=safe.frequency_hz,
             fill=safe.fill,
             brightness=safe.brightness,
-            color="white",
         )
         self._sim.update_strobe(self._strobe)
         self._audio.set_sync_freq(safe.frequency_hz)
