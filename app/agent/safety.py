@@ -166,16 +166,21 @@ class SafetySupervisor:
     max_brightness_step_per_s: float = MAX_BRIGHTNESS_STEP_PER_S
     railed_pct_disconnect_threshold: float = RAILED_PCT_DISCONNECT_THRESHOLD
     on_event: Optional[Callable[[SafetyEvent], None]] = None
-    # Fixed inter-action interval, in seconds, for ramp-rate limiting.
+    # Fixed inter-action interval, in seconds, for ramp-rate limiting AND
+    # for the session clock.
     # None (default) = derive dt from wall clock, correct for live sessions.
     # Set to 1 / tick_hz when driving a simulated clock so the limiter
-    # enforces its documented rate and rollouts are reproducible.
+    # enforces its documented rate, ``SafetyEvent.t_ms`` timestamps are in
+    # *simulated* seconds, and rollouts are reproducible.
     tick_dt_s: Optional[float] = None
 
     _events: List[SafetyEvent] = field(default_factory=list)
     _last_action: Optional[StimAction] = None
     _last_action_t: float = 0.0
     _session_start_t: float = field(default_factory=time.time)
+    # Simulated seconds since session start; advanced by one ``tick_dt_s``
+    # per clamp() call and only consulted when tick_dt_s is set.
+    _sim_elapsed_s: float = 0.0
     _panic_latched: bool = False
 
     @classmethod
@@ -203,6 +208,19 @@ class SafetySupervisor:
         return list(self._events)
 
     @property
+    def event_count(self) -> int:
+        """Number of events logged so far, without copying the list.
+
+        Per-tick consumers (rollout harnesses counting how often the ramp
+        limiter bound) would otherwise pay O(n) per tick on ``events``.
+        """
+        return len(self._events)
+
+    def events_since(self, index: int) -> List[SafetyEvent]:
+        """Events logged after ``index`` (pair with ``event_count``)."""
+        return self._events[index:]
+
+    @property
     def panic_active(self) -> bool:
         return self._panic_latched
 
@@ -211,6 +229,7 @@ class SafetySupervisor:
         self._last_action = None
         self._last_action_t = 0.0
         self._session_start_t = time.time()
+        self._sim_elapsed_s = 0.0
         self._panic_latched = False
 
     def panic(self, reason: str = "user_panic") -> StimAction:
@@ -227,6 +246,16 @@ class SafetySupervisor:
         )
 
     def session_elapsed_s(self) -> float:
+        """Seconds since session start on whichever clock is configured.
+
+        With ``tick_dt_s`` set this is *simulated* time (one tick per
+        ``clamp()`` call), so session-timeout checks and ``SafetyEvent``
+        timestamps are meaningful in a simulator that runs ~1000x faster
+        than real time. Otherwise it is wall time, correct for a live
+        session.
+        """
+        if self.tick_dt_s is not None:
+            return self._sim_elapsed_s
         return time.time() - self._session_start_t
 
     def clamp(
@@ -237,8 +266,22 @@ class SafetySupervisor:
         """
         Apply all safety rules and return the safe action.
 
-        Records a SafetyEvent for every modification.
+        Records a SafetyEvent for every modification. Advances the
+        simulated session clock by one tick on every call (including the
+        early-return paths), so event timestamps stay in step with the
+        control loop.
         """
+        try:
+            return self._clamp_impl(action, railed_pct)
+        finally:
+            if self.tick_dt_s is not None:
+                self._sim_elapsed_s += float(self.tick_dt_s)
+
+    def _clamp_impl(
+        self,
+        action: StimAction,
+        railed_pct: float = 0.0,
+    ) -> StimAction:
         if self._panic_latched:
             return self.panic("panic_latched")
 
@@ -306,12 +349,13 @@ class SafetySupervisor:
         # machine speed. Callers running against a simulated clock pass
         # ``tick_dt_s`` (e.g. 1 / tick_hz) to get the intended rate and
         # reproducible trajectories.
-        now_wall = time.time()
+        now = self.session_elapsed_s() if self.tick_dt_s is not None \
+              else time.time()
         if self._last_action is not None:
             if self.tick_dt_s is not None:
                 dt = float(self.tick_dt_s)
             else:
-                dt = max(1e-3, now_wall - self._last_action_t)
+                dt = max(1e-3, now - self._last_action_t)
             max_df = self.max_freq_step_hz_per_s * dt
             req_df = result.frequency_hz - self._last_action.frequency_hz
             if abs(req_df) > max_df:
@@ -333,11 +377,11 @@ class SafetySupervisor:
                 result.brightness = ramp_bri
 
         self._last_action = result
-        self._last_action_t = now_wall
+        self._last_action_t = now
         return result
 
     def _now_ms(self) -> int:
-        return int((time.time() - self._session_start_t) * 1000)
+        return int(self.session_elapsed_s() * 1000)
 
     def _log(self, t_ms: int, kind: str, field_name: str,
              before: float, after: float, reason: str) -> None:

@@ -54,3 +54,8 @@ project_files
 data/external_tracks/source
 
 *future*
+
+backup_*
+downloads
+data/images/in_progress
+tools/temp

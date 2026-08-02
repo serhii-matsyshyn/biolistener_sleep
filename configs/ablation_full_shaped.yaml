@@ -3,25 +3,23 @@
 #
 # EXPECTED BEHAVIOUR: ramps the strobe α -> θ over 4-5 min as the brain
 # follows; high entrainment fidelity in the sleep-conducive bands; no
-# parking at α. This is the variant that "wins" the ablation; its
-# checkpoint feeds the cross-subject consistency experiment (B) and the
-# real-session pilot (D).
+# parking at α. Its descent is not separable from the biomarker-only
+# variant at this budget.
 #
-# Episode length matches real sleep-onset latency (5 min ≈ N1 onset for
-# healthy adults). At 60 s episodes the policy only saw the transition
-# phase; at 300 s it sees the full descent into θ.
+# Episode length is 300 simulated seconds, a window onto a longer
+# transition rather than a calibrated sleep-onset latency.
 #
 # Run via:
 #   biolistener-sleep train --config configs/ablation_full_shaped.yaml \
 #     --set training.seed=<N>
 
 training:
-  total_steps: 100000              # 5-min episodes -> ~83 episodes per seed
-                                   # (naive baselines kept at 30k for contrast)
-  episode_s: 300                   # 5 min, matches sleep-onset latency
+  total_steps: 300000              # 250 episodes per seed; all four variants
+                                   # share this budget
+  episode_s: 300                   # simulated seconds, not clock-calibrated
   learning_rate: 3.0e-4
   batch_size: 128
-  buffer_size: 50000               # bigger replay buffer for longer trajectories
+  buffer_size: 150000              # 50 % of the budget, held constant across variants
   seed: 1
   n_envs: 8                        # 8 parallel collectors on 16-core box
 

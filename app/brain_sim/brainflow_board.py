@@ -271,10 +271,12 @@ class InProcessBrainSim:
 
     **Vigilance drift** is applied each step: the brain's background
     cortical drive (p_mean / p_std) is multiplied by an arousal factor
-    that decays linearly over ``session_duration_s``, mimicking the
+    that decays linearly over the subject's ``sol_scale_s``, mimicking the
     ascending-reticular activating system gradually disengaging. The
     NMM's spectrum naturally tilts θ-ward as p_mean drops - that's the
-    organic drowsiness signal the agent learns to detect and accelerate.
+    endogenous drowsiness signal. NO agent action can influence it: p_mean/p_std
+    are written only here, from a pure function of simulated time and the
+    subject's own sol_scale_s (see vigilance_drift).
     """
 
     def __init__(
@@ -295,15 +297,53 @@ class InProcessBrainSim:
         self.vigilance_drift_enabled = vigilance_drift_enabled
         self._base_p_mean = self.brain.p_mean
         self._base_p_std = self.brain.p_std
+        # Record the envelope ACTUALLY DELIVERED, sample by sample, so PLV is
+        # scored against the true command history rather than against a
+        # reference regenerated from one frequency at window-relative t=0
+        # (which caps PLV at the arm's own ramp rate).
+        from collections import deque
+        self._env_buf: deque = deque(maxlen=int(8.0 * self.brain.sampling_rate))
+
+    def delivered_envelope(self, n: int) -> np.ndarray:
+        """The last ``n`` samples of the envelope actually delivered.
+
+        Ground truth for PLV: built from the true per-sample command history
+        on the absolute clock, so it reflects every mid-window frequency
+        change instead of assuming one constant frequency.
+        """
+        if n <= 0 or not self._env_buf:
+            return np.zeros(max(0, n), dtype=np.float64)
+        arr = np.asarray(self._env_buf, dtype=np.float64)
+        if arr.size >= n:
+            return arr[-n:]
+        return np.concatenate([np.zeros(n - arr.size), arr])
 
     def update_strobe(self, strobe: StrobeParams) -> None:
         self._strobe = strobe
 
     def step(self) -> np.ndarray:
         if self.vigilance_drift_enabled:
-            m_mean, m_std = vigilance_drift(self._t, self.session_duration_s)
+            m_mean, m_std = vigilance_drift(
+                self._t,
+                self.photic_config.sol_scale_s,
+                end_arousal=self.photic_config.arousal_floor,
+            )
             self.brain.p_mean = self._base_p_mean * m_mean
             self.brain.p_std = self._base_p_std * m_std
+        if self.photic_config.exogenous_shift:
+            # Contrast condition: the resonance peak drifts on a fixed
+            # time course instead of tracking measured drowsiness, so the
+            # controller cannot move its own target. The env leaves
+            # ``current_drowsiness`` alone in this mode.
+            self.photic_config.current_drowsiness = \
+                self.photic_config.exogenous_drive(self._t)
+        st = self._strobe
+        if st.enabled and st.brightness > 0.0:
+            _per = 1.0 / max(st.frequency_hz, 1e-6)
+            self._env_buf.append(
+                1.0 if (self._t % _per) / _per < st.fill else 0.0)
+        else:
+            self._env_buf.append(0.0)
         photic = strobe_to_cortical_input(self._t, self._strobe, self.photic_config)
         sample = self.brain.step(photic_input=photic)
         self._t += self.brain.dt

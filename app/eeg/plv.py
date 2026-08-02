@@ -12,9 +12,14 @@ If the brain is following the strobe (SSVEP / photic driving), the
 phase difference is stable -> PLV close to 1. If the brain is doing its
 own thing, the phase difference walks -> PLV close to 0.
 
-PLV separates entrainment from endogenous rhythm - without it, the
-reward function would confuse an α-band artifact at the strobe frequency
-with real photic driving.
+This does not cleanly separate entrainment from endogenous rhythm. It
+measures phase locking between the EEG and the delivered strobe envelope,
+and both are band-passed in a fixed 2 Hz window around the current
+commanded frequency - so an endogenous rhythm that happens to sit at the
+strobe frequency scores the same as driven activity. It is also not
+comparable across arms with different ramp rates: at the ramp-limiter cap a
+4 s window can sweep 2 Hz, attenuating both signals. Treat PLV as
+"phase locking to the delivered stimulus".
 
 Reference: Lachaux et al. 1999, "Measuring phase synchrony in brain
 signals", Hum. Brain Mapp. 8(4):194-208.

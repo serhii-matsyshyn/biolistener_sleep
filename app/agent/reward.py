@@ -1,11 +1,18 @@
 """
 Reward function for the RL agent - sleep-onset shaping.
 
-Thesis goal: drive the user from wake into N1 hypnagogia. The reward is
-designed so a policy that **parks at high-α with great phase-locking
-forever** gets near-zero reward; the only way to climb is to actually
-ramp the strobe down through the sleep-conducive bands while the brain
-follows.
+Thesis goal: drive the user from wake into N1 hypnagogia. The intended way
+to climb is to ramp the strobe down through the sleep-conducive bands while
+the brain follows, rather than parking at high-α with good phase-locking.
+
+The reward does order policies as intended - descend > park-in-theta >
+park-at-alpha > nothing - but it is not zero for an inert device: the
+sustained-level term also pays for the endogenous theta/alpha rise that no
+policy causes, so a switched-off device still earns 16-34% of a descending
+ramp's return and a constant 4 Hz strobe 78-83% of it. That free component
+is a subject-level random effect (0.005 to 601.7 across 12 subjects), not a
+constant offset, so controller headroom (~17-22%) must always be quoted
+together with the stimulation dose it was measured at.
 
 Term-by-term:
 
@@ -17,19 +24,20 @@ Term-by-term:
 3. ``Δ hypnagogic-θ`` - explicit 4–7 Hz growth (the band that defines
    N1 hypnagogia).
 4. ``band_weight(strobe_freq) · PLV``  - entrainment-fidelity bonus,
-   but ONLY when the strobe is in a sleep-conducive band.  This is the
-   change vs. the previous version: PLV at 12 Hz earns zero, PLV at
-   6 Hz earns the full coefficient.  Closes the loophole where the
-   policy could collect a constant PLV trickle at wake-frequency.
-5. ``+k · max(0, prev_freq − curr_freq)`` - frequency-descent shaping.
+   but ONLY when the strobe is in a sleep-conducive band: PLV at 12 Hz
+   earns zero, PLV at 6 Hz earns the full coefficient. Closes the
+   loophole where the policy could collect a constant PLV trickle at
+   wake-frequency.
+5. ``+k · (prev_freq − curr_freq)`` - frequency-descent shaping. Signed,
+   not clamped: it telescopes to k·(f0−fT) and is path-independent, whereas
+   a clamped max(0,·) form would pay for down-travel and reward oscillation.
    Tiny per-tick reward for ramping the strobe DOWN, zero for holds,
    negative for upward jumps (the SafetySupervisor's ramp-rate cap
    bounds this so the agent can't game it with infinite-rate descents).
 6. ``k_disconnect`` (large negative) - electrode-disconnect bailout.
 
-EMG penalty REMOVED - the v1 BioListener montage has no dedicated EMG
-electrodes; the previous γ-band fallback was confounded with cortical γ
-and added noise without measuring what it claimed to measure.
+There is no EMG penalty: the v1 BioListener montage has no dedicated EMG
+electrodes, and a γ-band fallback would be confounded with cortical γ.
 
 All terms are computed from MANUAL features + the stim action - no
 MLModel dependency. The reward signature is stable across the project
@@ -112,8 +120,8 @@ def compute_reward(
     direction to reward yet. ``strobe_freq_hz`` / ``prev_strobe_freq_hz``
     are the current/previous SAFE strobe frequency in Hz (after the
     SafetySupervisor clamps), used for band-weighting PLV and shaping
-    descent. Both default to safe no-ops so unit tests that pre-date the
-    signature change continue to work.
+    descent. Both default to safe no-ops: an omitted frequency contributes
+    no band-weighted PLV bonus and no descent shaping.
     """
     # 5) Electrode disconnect - immediate large negative, override everything
     if curr.railed_pct > 80.0:
@@ -139,7 +147,11 @@ def compute_reward(
     if prev_strobe_freq_hz is None:
         descent_term = 0.0
     else:
-        descent_term = prev_strobe_freq_hz - strobe_freq_hz  # +Hz/tick on descent
+        # Signed, not clamped: a clamped max(0, ·) form pays k * down-travel
+        # and would make an oscillating trajectory strictly more profitable
+        # than a monotone descent. The signed form telescopes to k*(f0-fT)
+        # and is path-independent.
+        descent_term = prev_strobe_freq_hz - strobe_freq_hz
 
     return float(
         weights.k_theta_alpha * dr_theta_alpha

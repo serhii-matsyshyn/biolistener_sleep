@@ -11,6 +11,12 @@ Brightness comes from config (not the recorded segments) so we can tune
 intensity per subject without re-recording. The audio file is played
 through ``OpenLoopTrackAudioPlayer``, started separately by the daemon's
 ``_setup_audio`` branch.
+
+**Clock.** ``tick_hz=None`` (default) reads the wall clock, which is
+correct for a live session driven in real time. In simulation the control
+loop runs far faster than real time, so callers driving a simulated clock
+set ``tick_hz`` to the control rate and each ``predict()`` call advances
+exactly 1 / tick_hz of *simulated* time.
 """
 from __future__ import annotations
 
@@ -33,7 +39,11 @@ class OpenLoopTrackPolicy:
     brightness: float = 0.30          # not in recorded data - config-level
     audio_master_pct: float = 50.0
     audio_strobe_depth_pct: float = 20.0
+    # None -> wall clock (live sessions). Set to the control-loop rate
+    # (e.g. 4.0) to count predict() calls as simulated time instead.
+    tick_hz: Optional[float] = None
     _start_t: float = field(default_factory=time.time)
+    _ticks: int = 0
     # Set True the first time params_at() reports past-end. The daemon's
     # control loop reads this on each tick and closes the session so it
     # doesn't sit forever emitting "off" frames after the CSV's last cycle.
@@ -41,12 +51,20 @@ class OpenLoopTrackPolicy:
 
     def reset(self) -> None:
         self._start_t = time.time()
+        self._ticks = 0
         self.track_ended = False
+
+    def elapsed_s(self) -> float:
+        """Seconds since ``reset()`` on whichever clock is configured."""
+        if self.tick_hz is not None:
+            return self._ticks / max(1e-9, float(self.tick_hz))
+        return time.time() - self._start_t
 
     def predict(self, observation: np.ndarray, deterministic: bool = True):
         from app.agent.safety import FREQ_MAX_HZ, FREQ_MIN_HZ
 
-        elapsed = time.time() - self._start_t
+        elapsed = self.elapsed_s()
+        self._ticks += 1
         params = self.playback.params_at(elapsed)
         if params is None:
             # Track ended - emit OFF and latch the end-of-track flag.

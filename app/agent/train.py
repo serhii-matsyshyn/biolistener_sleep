@@ -29,7 +29,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
-from app.agent.env import EnvConfig, SleepOnsetEnv
+from app.agent.env import CONTROL_TICK_HZ, EnvConfig, SleepOnsetEnv
 from app.agent.policies import FixedFrequencyPolicy, LinearRampDownPolicy
 from app.agent.reward import RewardWeights
 from app.agent.reward_variants import resolve as resolve_reward_variant
@@ -60,6 +60,22 @@ class TrainConfig:
     # Logged to MLflow for ablation comparison.
     reward_variant: Optional[str] = None
     reward_weights: Optional["RewardWeights"] = None
+    # Domain-randomisation of the state->plant coupling gain. None puts
+    # every subject at the PhoticInputConfig default of 2.0. Set to e.g.
+    # (0.0, 2.0) so a coupling sweep at evaluation time is in-distribution
+    # at every level instead of only at 2.0 - otherwise a drop in
+    # closed-loop advantage at low coupling cannot be separated from "the
+    # policy has never seen this plant".
+    shift_per_unit_ratio_range: Optional[tuple] = None
+    # Optional slug inserted into the run/checkpoint name, so runs that
+    # share a reward variant but differ in plant family stay tellable
+    # apart in ``app/agent/checkpoints/`` by name rather than timestamp.
+    run_label: Optional[str] = None
+    # Train against the exogenous-drift contrast plant instead of the
+    # endogenous (closed) coupling. Each condition gets a policy trained
+    # on its own plant family, so the comparison is not confounded by
+    # train/test mismatch in either direction.
+    exogenous_shift: bool = False
     # Number of parallel envs collecting transitions during training.
     # 1 -> single-process (DummyVecEnv, no fork). >1 -> SubprocVecEnv with
     # one Python process per env on its own CPU core. The NMM brain sim is
@@ -100,13 +116,20 @@ def _resolve_reward_weights(cfg: TrainConfig) -> Optional[RewardWeights]:
     return None
 
 
+def _randomization(cfg: TrainConfig) -> RandomizationRanges:
+    return RandomizationRanges(
+        shift_per_unit_ratio_range=cfg.shift_per_unit_ratio_range,
+        exogenous_shift=cfg.exogenous_shift,
+    )
+
+
 def make_env(cfg: TrainConfig) -> Monitor:
     """Single Monitor-wrapped SleepOnsetEnv (used for post-training eval
     + baseline rollouts where the rest of the code expects single-env API)."""
     env_cfg = EnvConfig(
         episode_s=cfg.episode_s,
         include_restfulness=cfg.include_restfulness,
-        randomization=RandomizationRanges(),
+        randomization=_randomization(cfg),
         reward_weights=_resolve_reward_weights(cfg),
     )
     return Monitor(SleepOnsetEnv(env_cfg))
@@ -124,10 +147,14 @@ def _env_factory(cfg: TrainConfig, rank: int):
         env_cfg = EnvConfig(
             episode_s=cfg.episode_s,
             include_restfulness=cfg.include_restfulness,
-            randomization=RandomizationRanges(),
+            randomization=_randomization(cfg),
             reward_weights=rw,
         )
         env = SleepOnsetEnv(env_cfg)
+        # Give each collector a disjoint, reproducible subject stream.
+        # A bare reset(seed=...) would only fix the FIRST episode, since SB3
+        # auto-resets unseeded thereafter.
+        env.unwrapped.set_episode_seed_base(base_seed * 1_000_003 + rank * 10_007)
         env.reset(seed=base_seed + rank)   # warm the per-env RNG
         return Monitor(env)
     return _init
@@ -150,11 +177,18 @@ def make_vec_env(cfg: TrainConfig) -> VecEnv:
     return SubprocVecEnv(factories, start_method="fork")
 
 
-def evaluate_baseline(policy, env: Monitor, n_episodes: int = 5) -> list:
-    """Run baseline policy over n_episodes; return list of episode rewards."""
+def evaluate_baseline(policy, env: Monitor, n_episodes: int = 5,
+                      seeds: Optional[list] = None) -> list:
+    """Run baseline policy over n_episodes; return list of episode rewards.
+
+    ``seeds`` pins the subjects so every arm is scored on the SAME cohort;
+    without it the env auto-resets unseeded and consecutive arms consume
+    disjoint blocks of subjects, which cannot be compared as paired.
+    """
     rewards = []
-    for _ in range(n_episodes):
-        obs, _ = env.reset()
+    seq = list(seeds) if seeds else [None] * n_episodes
+    for _sd in seq[:n_episodes]:
+        obs, _ = env.reset(seed=_sd)
         if hasattr(policy, "reset"):
             policy.reset()
         total = 0.0
@@ -181,6 +215,8 @@ def train(cfg: Optional[TrainConfig] = None) -> str:
     # notebook + eval CLI can map "winning variant" -> checkpoint path
     # without having to query MLflow for artifact URIs.
     variant_slug = cfg.reward_variant or "custom"
+    if cfg.run_label:
+        variant_slug = f"{variant_slug}_{cfg.run_label}"
     run_name = f"sac_{variant_slug}_seed{cfg.seed}_{int(time.time())}"
 
     with mlflow.start_run(run_name=run_name) as run:
@@ -195,6 +231,8 @@ def train(cfg: Optional[TrainConfig] = None) -> str:
             "tau": cfg.tau,
             "seed": cfg.seed,
             "include_restfulness": cfg.include_restfulness,
+            "shift_per_unit_ratio_range": str(cfg.shift_per_unit_ratio_range),
+            "exogenous_shift": cfg.exogenous_shift,
         })
 
         # Reward variant + coefficients - surfaces in MLflow so the
@@ -256,15 +294,31 @@ def train(cfg: Optional[TrainConfig] = None) -> str:
         # randomness from the training vec state.
         eval_env = make_env(cfg)
         logger.info("Evaluating baselines...")
-        fixed = FixedFrequencyPolicy(frequency_hz=10.0)
+        # Match the baselines' delivered light dose to SAC's at the safety
+        # ceiling; at the default fill/brightness they deliver ~4x less
+        # energy, so `sac_eval_mean - baseline_*_mean` would be partly a
+        # lamp-brightness comparison instead of a frequency-schedule one.
+        from app.agent.safety import BRIGHTNESS_MAX_V1, FILL_MAX
+        _AMP = dict(fill=FILL_MAX, brightness=BRIGHTNESS_MAX_V1)
+        fixed = FixedFrequencyPolicy(frequency_hz=10.0, **_AMP)
         ramp = LinearRampDownPolicy(
             start_hz=11.0, end_hz=4.0, duration_s=cfg.episode_s,
+            # Simulated clock: without this the ramp reads the wall clock
+            # and finishes its 11->4 Hz descent in the first second of a
+            # 300 s simulated episode, making the baseline meaningless.
+            tick_hz=CONTROL_TICK_HZ,
         )
-        fixed_rewards = evaluate_baseline(fixed, eval_env, n_episodes=5)
-        ramp_rewards = evaluate_baseline(ramp, eval_env, n_episodes=5)
+        # Pin all three arms to the SAME held-out subjects so the comparison
+        # is paired; these seeds are disjoint from the training stream
+        # (base_seed*1_000_003 + rank*10_007).
+        EVAL_SEEDS = [900_000 + i for i in range(5)]
+        fixed_rewards = evaluate_baseline(fixed, eval_env, n_episodes=5,
+                                          seeds=EVAL_SEEDS)
+        ramp_rewards = evaluate_baseline(ramp, eval_env, n_episodes=5,
+                                         seeds=EVAL_SEEDS)
         sac_eval = []
-        for _ in range(5):
-            obs, _ = eval_env.reset()
+        for _s in EVAL_SEEDS:
+            obs, _ = eval_env.reset(seed=_s)
             total = 0.0
             done = False
             truncated = False

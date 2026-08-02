@@ -57,6 +57,12 @@ import numpy as np
 # while the mask is driven white-only.
 EYELID_TRANSMISSION = 0.10
 
+# Endpoints of the session-long arousal decay in :func:`vigilance_drift`.
+# Named here so the exogenous-drift contrast condition can normalise that
+# same scalar to [0, 1] instead of re-deriving a parallel schedule.
+_VIGILANCE_START = 1.0
+_VIGILANCE_END = 0.3
+
 
 @dataclass
 class StrobeParams:
@@ -106,12 +112,45 @@ class PhoticInputConfig:
     cortical_gain: float = 400.0
     base_resonance_hz: float = 10.0          # awake-state peak
     resonance_width_hz: float = 4.0          # σ (widened from 3 -> 4)
-    # State-dependent shift parameters
+    # State-dependent shift parameters.
+    #
+    # ``shift_per_unit_ratio`` is the GAIN of a state -> plant coupling, not
+    # a drift rate: the peak is a function of the current measured state,
+    # never of elapsed time. Because a controller that drives θ/α thereby
+    # moves the peak, this closes a *positive feedback* loop - the optimum
+    # moves in response to the controller's own success.
     shift_per_unit_ratio: float = 2.0        # Hz per unit (θ/α − baseline)
     shift_baseline_ratio: float = 0.5        # θ/α below which no shift
     min_resonance_hz: float = 4.0            # floor on shifted peak
-    # Mutable state - updated by env after each control-tick feature extraction
-    current_drowsiness: float = 0.0          # current θ/α ratio
+    # Mutable state - the drive that the shift is computed from.
+    # Endogenous mode (default): the env writes the smoothed θ/α ratio here
+    # after each control-tick feature extraction, so the loop is closed.
+    # Exogenous mode: ``InProcessBrainSim.step`` writes a purely
+    # time-driven schedule here instead (see ``exogenous_shift``), so the
+    # peak drifts on a fixed course the controller cannot influence.
+    current_drowsiness: float = 0.0
+
+    # --- exogenous-drift contrast condition ------------------------------
+    # When True the shift drive is a function of session progress only,
+    # keyed to the same ascending-arousal decay as ``vigilance_drift``
+    # (Phillips & Robinson 2007). This turns the state -> plant coupling
+    # into a classical exogenous disturbance, removing the feedback path
+    # while leaving the *magnitude* of the excursion unchanged, so the same
+    # gain axis is directly comparable between the two conditions.
+    exogenous_shift: bool = False
+
+    # --- per-subject arousal dynamics (see vigilance_drift) --------------
+    # sol_scale_s: this subject's own transition timescale, in simulated
+    # seconds. Sampled lognormally per subject so the episode is a window on
+    # a longer process rather than the whole process. arousal_floor: how deep
+    # this subject's background drive falls once the transition completes.
+    sol_scale_s: float = 300.0
+    arousal_floor: float = _VIGILANCE_END
+    # Drive excess at end of the subject's transition in exogenous mode.
+    # Set from the plant's own geometry - the span that carries the peak from
+    # base_resonance_hz down to min_resonance_hz at unit coupling gain - so
+    # the contrast condition's magnitude is independent of any policy.
+    exogenous_span: float = 6.0
 
     @property
     def effective_resonance_hz(self) -> float:
@@ -120,6 +159,27 @@ class PhoticInputConfig:
         shift = excess * self.shift_per_unit_ratio
         peak = self.base_resonance_hz - shift
         return max(self.min_resonance_hz, peak)
+
+    def exogenous_drive(self, t: float) -> float:
+        """Time-driven value for ``current_drowsiness`` in exogenous mode.
+
+        Derived from :func:`vigilance_drift` - the same ascending-arousal
+        decay that already modulates the NMM's background drive, and the
+        one carrying the Phillips & Robinson (2007) citation - rather than
+        from a second schedule that could drift away from it. The arousal
+        scalar is normalised to [0, 1] and scaled by ``exogenous_span``, so
+        the peak descends from ``base_resonance_hz`` to
+        ``base_resonance_hz − shift_per_unit_ratio × exogenous_span``
+        on a course the controller cannot influence.
+        """
+        arousal, _ = vigilance_drift(
+            t, self.sol_scale_s,
+            start_arousal=_VIGILANCE_START, end_arousal=self.arousal_floor,
+        )
+        span = _VIGILANCE_START - self.arousal_floor
+        frac = (_VIGILANCE_START - arousal) / span if span else 0.0
+        frac = min(1.0, max(0.0, frac))
+        return self.shift_baseline_ratio + self.exogenous_span * frac
 
 
 def strobe_to_cortical_input(
@@ -164,12 +224,28 @@ def strobe_envelope(
 
 def vigilance_drift(
     t: float,
-    duration_s: float,
-    start_arousal: float = 1.0,
-    end_arousal: float = 0.3,
+    sol_scale_s: float,
+    start_arousal: float = _VIGILANCE_START,
+    end_arousal: float = _VIGILANCE_END,
 ) -> Tuple[float, float]:
     """
     Background drift mimicking falling-asleep over a session.
+
+    ``sol_scale_s`` is the subject's OWN transition timescale, in simulated
+    seconds, and is sampled per subject (``RandomizationRanges``). Arousal
+    reaches ``end_arousal`` at ``t = sol_scale_s`` and is clamped thereafter.
+
+    This is an ABSOLUTE clock, not a fraction of the episode. With a
+    per-subject scale the episode is a *window* on a longer process - fast
+    subjects reach the floor inside it, slow ones barely move - which is the
+    heterogeneity a closed loop is supposed to exploit. Normalising to episode
+    length instead would collapse fast and slow sleepers onto one subject.
+
+    NOTE ON UNITS: the distribution is calibrated so the episode spans the
+    population's transition range (median subject completes at about one
+    episode length, ~10x spread). It is NOT calibrated to clock-time
+    sleep-onset latency, and no result derived from it may be described in
+    minutes-to-sleep-onset.
 
     Returns (p_mean_multiplier, p_std_multiplier) for the NMM. Arousal drops
     monotonically over the session, modeling reduced ascending arousal drive:
@@ -192,10 +268,14 @@ def vigilance_drift(
     modulatory drift, so the two could be decoupled if needed.
 
     Wired in `InProcessBrainSim.step()` so the brain's background drive
-    decays over the session, organically raising θ/α. This is the
-    "natural drowsiness drift" the agent both fights against and leverages -
-    its job is to accelerate the drift via well-timed entrainment.
+    decays over the session, organically raising θ/α.
+
+    THE AGENT CANNOT INFLUENCE THIS. Arousal is a pure function of simulated
+    time; no action reaches ``brain.p_mean`` / ``p_std``. The agent's only
+    causal path into the plant is the additive photic drive, so *accelerated
+    sleep onset* is not merely unmeasured in this simulator, it is
+    structurally unmeasurable.
     """
-    progress = min(1.0, max(0.0, t / max(duration_s, 1e-6)))
+    progress = min(1.0, max(0.0, t / max(sol_scale_s, 1e-6)))
     arousal = start_arousal + (end_arousal - start_arousal) * progress
     return arousal, arousal

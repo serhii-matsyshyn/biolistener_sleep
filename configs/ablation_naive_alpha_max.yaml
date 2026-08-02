@@ -7,11 +7,12 @@
 #     --set training.seed=<N>
 
 training:
-  total_steps: 30000               # 5-min episodes -> ~25 episodes per seed
-  episode_s: 300                   # 5 min, matches sleep-onset latency
+  total_steps: 300000              # 250 episodes per seed; matched to the
+                                   # other variants
+  episode_s: 300                   # simulated seconds, not clock-calibrated
   learning_rate: 3.0e-4
   batch_size: 128
-  buffer_size: 50000
+  buffer_size: 150000              # 50 % of the budget, as for every variant
   seed: 1
   n_envs: 8                        # SubprocVecEnv - 8 parallel collectors on 16-core box
 
