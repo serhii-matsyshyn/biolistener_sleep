@@ -25,8 +25,7 @@ export default function SessionsRoute() {
   const [protocol, setProtocol] = useState<SessionProtocol>("rl_agent");
   const [olActivity, setOlActivity] = useState<string | null>(null);
   // Track selection by variant_key (always non-null), not by duration_min -
-  // some activities ("Mind Games / *", "Instructional Series / *", …) only
-  // have a single variant whose duration is null.
+  // some activities only have a single variant whose duration is null.
   const [olVariantKey, setOlVariantKey] = useState<string | null>(null);
   const [eegSource, setEegSource] = useState("sim");
   const [maskTarget, setMaskTarget] = useState("virtual");
@@ -52,7 +51,7 @@ export default function SessionsRoute() {
 
   // Auto-select the only variant when the activity has just one - same UX
   // as the Demo Open Loop page, so the user doesn't sit on an empty Duration
-  // dropdown for activities like "Mind Games / Love".
+  // dropdown for single-variant activities.
   useEffect(() => {
     const variants = durationsQ.data;
     if (!variants || variants.length === 0) return;

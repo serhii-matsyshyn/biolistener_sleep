@@ -1,0 +1,9 @@
+{
+  "n_naive_seeds_100k": 9,
+  "n_naive_descending_100k": 0,
+  "n_shaped_seeds_100k": 3,
+  "n_shaped_descending_100k": 1,
+  "best_naive_strobe_hz_100k": 8.499668675661088,
+  "theta_alpha_ratio_shaped_over_best_naive_100k": 0.6812433696044949,
+  "max_abs_notch_shift_frac": 0.0812256910728868
+}

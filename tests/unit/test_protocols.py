@@ -239,13 +239,13 @@ def test_catalog_parses_yaml_with_yaml1_1_quirky_keys(tmp_path: Path):
           sounds_dir: snd
           strobes_dir: strb
         blocks:
-          Mind Games:
+          Block One:
             Yes:                     # YAML 1.1 -> Python True
               default:
                 sound: "a.mp3"
                 strobe: "x.csv"
-          Sleep Better:
-            "Befriending Sleep":
+          Block Two:
+            "Quoted Activity":
               10:                    # parses as Python int
                 sound: "b.mp3"
                 strobe: "y.csv"
@@ -255,8 +255,8 @@ def test_catalog_parses_yaml_with_yaml1_1_quirky_keys(tmp_path: Path):
     assert len(cat.activities()) == 2
     names = {a.display_name for a in cat.activities()}
     assert "True" in names or "Yes" in names  # display_name coerced via str()
-    assert "Befriending Sleep" in names
-    bs = next(a for a in cat.activities() if a.display_name == "Befriending Sleep")
+    assert "Quoted Activity" in names
+    bs = next(a for a in cat.activities() if a.display_name == "Quoted Activity")
     assert bs.variant_for_duration(10).duration_min == 10
 
 
