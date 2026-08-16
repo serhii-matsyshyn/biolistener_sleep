@@ -118,6 +118,16 @@ The Live page surfaces the 4 Hz control-loop tick-budget probe (last and max com
 
 This is research code in active development. It has been validated in simulation and on the integration test harness; real-subject sessions are run as a feasibility appendix to the thesis, not as the primary evidence. The architecture is intentionally clear about scope: the simulation experiments are the *experimental method* (statistical power that a limited number of human sessions cannot match); the hardware testbed is the *deployment and demonstration platform*.
 
+## Related repositories
+
+Part of the [BioListener](https://github.com/serhii-matsyshyn/biolistener) ecosystem of open-source biosensing tooling:
+
+| repository | role |
+|---|---|
+| [biolistener](https://github.com/serhii-matsyshyn/biolistener) | the ESP32 biosensing board this system reads EEG from, over BrainFlow |
+| [biolistener_sleep_mask_firmware](https://github.com/serhii-matsyshyn/biolistener_sleep_mask_firmware) | ESP32 firmware for the stroboscopic LED mask, driven over UDP by [app/mask/](app/mask/) |
+| **biolistener_sleep** (this repository) | closed-loop daemon, brain simulator, RL agent, safety supervisor, operator UI |
+
 ## License
 
 This repository uses the following licenses:
