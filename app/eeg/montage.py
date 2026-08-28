@@ -3,12 +3,12 @@ Electrode montage definitions for BioListener's 8-channel layout.
 
 Two reference montages backed by the existing work in this lab:
 
-- **OCCIPITAL_ALPHA** (bachelor §5.4.3 validation montage):
-    O1 -> CH0 (occipital - strongest endogenous α)
-    A1 -> ground (left ear)
-    A2 -> reference (right ear)
-    Fp2 -> CH1 (EOG / eye-blink EMG)
-    Remaining channels free for auxiliary placements.
+- **OCCIPITAL_ALPHA** (validation montage):
+    O1 -> CH0 (occipital - strongest endogenous α and photic driving)
+    Fp2 -> CH1 (EOG / eye-blink)
+    M2 -> reference, M1 -> bias. Reference contralateral to the primary, so it
+    subtracts less of the signal being measured.
+    Remaining channels not connected and disabled at session start.
 
 - **FPZ_MASTOID** (master's-proposal montage):
     Fpz -> CH0 (frontal - captures frontal α + θ)
@@ -43,8 +43,9 @@ OCCIPITAL_ALPHA = Montage(
     primary_eeg_channels=[0],       # O1
     emg_channels=[],                # no dedicated EMG channel
     eog_channels=[1],               # Fp2
-    notes=("Bachelor validation montage. O1-A1-A2 captures eyes-closed "
-           "α dropout reliably; Fp2 picks up eye blinks for EOG energy."),
+    notes=("O1 referenced to the contralateral mastoid (M2), bias on M1. "
+           "Eyes-closed α dropout is largest occipitally, and so is the "
+           "photic driving response. Fp2 supplies EOG energy only."),
 )
 
 FPZ_MASTOID = Montage(

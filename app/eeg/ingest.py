@@ -4,7 +4,7 @@ samples from either the synthetic NMM TCP server, the real BioListener
 device, or a playback CSV.
 
 The agent code never knows which source it is - the swap from sim ->
-real is a config-only change. This is the M6 plug-and-play seam.
+real is a config-only change.
 """
 from __future__ import annotations
 
@@ -35,11 +35,28 @@ class IngestConfig:
     ip_port: int = 12345
     # Per-attempt prepare_session timeout. BIOLISTENER waits for the device
     # to dial in; if it isn't on yet the call blocks for `timeout` seconds
-    # before failing. 10 s matches the observed per-attempt window on this
-    # device - we rely on `connect_attempts` for the total connection budget.
+    # before failing; the total budget comes from `connect_attempts`.
     timeout: int = 10
+    # What the device actually streams, which is not always what it was asked
+    # for: a BIOLISTENER told 500 rounds to a power-of-two divider and streams
+    # 512, while ``BoardShim.get_sampling_rate`` keeps reporting 500. Every
+    # frequency in the analysis is scaled by the ratio, so this must be the
+    # measured rate. ``app.protocol.analysis.measure_sampling_rate`` reads it
+    # back off a recording's own timestamps.
+    # What the device delivers, used to size windows and to analyse. Not
+    # necessarily what it was asked for - see ``requested_data_rate``.
     sampling_rate: int = 500
-    pga_gain: int = 128
+    # What ``data_rate`` the device is commanded with. ``None`` sends
+    # ``sampling_rate``. These are separate because this board answers a
+    # commanded 500 with 511.995 Hz, so the value that works and the value
+    # that describes the stream are different numbers; sending the measured
+    # one back as a command would be asking for a rate never tested on it.
+    requested_data_rate: Optional[int] = None
+    # Must match `configs/daemon_prod.yaml` and the gain the device is running.
+    # The AD7771's PGA accepts 1, 2, 4, 8 or 16; the railed detector
+    # reconstructs ADC full scale from this, so a wrong value mis-scales every
+    # rail check.
+    pga_gain: int = 8
     # Channels physically connected to electrodes. Any of the 8 BIOLISTENER
     # channels NOT in this list gets {"command":2,"channel":N,"enable":0}
     # sent at session start so the device stops streaming on that input
@@ -86,9 +103,8 @@ class EEGIngestor:
         self._lock = threading.Lock()
 
     def _build_params(self) -> BrainFlowInputParams:
-        """Fresh InputParams per attempt - the BoardShim instance has to
-        be recreated between retries (a failed prepare_session() leaves
-        the BoardShim unusable), so we build the params block alongside it."""
+        """Fresh InputParams per attempt: a failed prepare_session() leaves
+        the BoardShim unusable, so both are rebuilt together."""
         params = BrainFlowInputParams()
         params.ip_address = self.config.ip_address
         params.ip_port = self.config.ip_port
@@ -115,6 +131,11 @@ class EEGIngestor:
     def sampling_rate(self) -> int:
         return self._sampling_rate
 
+    @sampling_rate.setter
+    def sampling_rate(self, value: int) -> None:
+        """Adopt a measured rate, so window lengths follow it too."""
+        self._sampling_rate = int(value)
+
     @property
     def eeg_channels(self) -> List[int]:
         return list(self._eeg_channels)
@@ -133,11 +154,9 @@ class EEGIngestor:
 
     def _prepare_with_retries(self) -> BoardShim:
         """Open a fresh BoardShim, retrying prepare_session() until the
-        BIOLISTENER dials in or the connection budget runs out. Each
-        attempt uses a per-attempt timeout (default 3 s) - the total
-        window is `connect_attempts * (timeout + connect_retry_delay_s)`.
-        For 'sim'/'playback' the first attempt always succeeds so the
-        retry path is hardware-only in practice."""
+        device dials in or the connection budget runs out. The total window
+        is ``connect_attempts * (timeout + connect_retry_delay_s)``. For
+        'sim' and 'playback' the first attempt always succeeds."""
         last_err: Optional[BaseException] = None
         for attempt in range(1, self.config.connect_attempts + 1):
             board = BoardShim(self.board_id, self._build_params())
@@ -168,14 +187,23 @@ class EEGIngestor:
     def start(self) -> None:
         self._board = self._prepare_with_retries()
 
-        # BIOLISTENER-specific runtime config (per user's existing viz script)
+        # BIOLISTENER-specific runtime config. Each command gets its own
+        # guard: sharing one meant a rejected data_rate skipped the gain and
+        # channel-disable calls that follow it, leaving floating inputs
+        # streaming and the railed detector reading against the wrong gain,
+        # with a single warning line as the only trace.
         if self.config.kind in {"sim", "biolistener"}:
+            rate = self.config.requested_data_rate or self.config.sampling_rate
             try:
                 self._board.config_board(
-                    f'{{"command": 1, "data_rate": {self.config.sampling_rate}}}\n'
-                )
-                active = set(int(c) for c in self.config.active_channels)
-                for ch in range(8):
+                    f'{{"command": 1, "data_rate": {int(rate)}}}\n')
+            except Exception:
+                logger.warning("data_rate %s was refused; the device keeps its "
+                               "current rate, which pre-flight measures anyway",
+                               rate, exc_info=True)
+            active = set(int(c) for c in self.config.active_channels)
+            for ch in range(8):
+                try:
                     if ch in active:
                         # Set gain on connected channels.
                         self._board.config_board(
@@ -188,9 +216,8 @@ class EEGIngestor:
                         self._board.config_board(
                             f'{{"command": 2, "channel": {ch}, "enable": 0}}\n'
                         )
-            except Exception:
-                logger.warning("config_board calls failed (ignored for sim)",
-                               exc_info=True)
+                except Exception:
+                    logger.warning("channel %d config failed", ch, exc_info=True)
         for extra in self.config.extra_config_board:
             try:
                 self._board.config_board(extra)
@@ -204,11 +231,8 @@ class EEGIngestor:
             logger.info("Recording EEG to %s", self.config.record_to)
 
         self._board.start_stream(450_000)
-        # Parity with the reference viewer (biosignals/brainflow_demo_app/
-        # plot_real_time_with_recording.py): a multicast streamer on
-        # 225.1.1.1:6677 lets a second process subscribe to the same
-        # samples (e.g. for a side viewer or recorder). Optional - the
-        # primary path does not depend on it.
+        # A multicast streamer lets a second process subscribe to the same
+        # samples. Optional - the primary path does not depend on it.
         if self.config.kind in {"sim", "biolistener"}:
             try:
                 self._board.add_streamer(
@@ -218,8 +242,17 @@ class EEGIngestor:
             except Exception:
                 logger.warning("add_streamer(multicast) failed (ignored)",
                                exc_info=True)
-        # Cache derived metadata
-        self._sampling_rate = BoardShim.get_sampling_rate(self.board_id)
+        # Cache derived metadata. The configured rate wins: BoardShim reports
+        # the board's nominal figure, which the device does not have to honour,
+        # and taking it here silently discarded the measured value.
+        board_rate = BoardShim.get_sampling_rate(self.board_id)
+        self._sampling_rate = int(self.config.sampling_rate or board_rate)
+        if board_rate != self._sampling_rate:
+            logger.warning(
+                "board reports %d Hz but config says %d Hz; using %d. Every "
+                "measured frequency scales by this ratio, so confirm it against "
+                "a recording's timestamps before trusting a session.",
+                board_rate, self._sampling_rate, self._sampling_rate)
         self._eeg_channels = BoardShim.get_eeg_channels(self.board_id)
         logger.info("EEGIngestor started (board=%d, sr=%d, channels=%s)",
                     self.board_id, self._sampling_rate, self._eeg_channels)
@@ -237,6 +270,21 @@ class EEGIngestor:
                 pass
             self._board = None
             logger.info("EEGIngestor stopped")
+
+    def sample_count(self) -> Optional[int]:
+        """Samples the board has buffered, for measuring the real stream rate.
+
+        Non-destructive and monotonic until the ring fills, which at 512 Hz
+        takes about fifteen minutes - far longer than the pre-flight window
+        this is used in.
+        """
+        if self._board is None:
+            return None
+        try:
+            return int(self._board.get_board_data_count())
+        except Exception:
+            logger.debug("get_board_data_count unavailable", exc_info=True)
+            return None
 
     def latest_window(self, window_s: float = 4.0) -> np.ndarray:
         """

@@ -6,7 +6,7 @@ mask UDP client or audio engine. Every clamp is logged as a
 ``SafetyEvent`` for the session record so the thesis can defend the
 exact actions that ever reached the user.
 
-Enforced rules (proposal §4.B + photosensitive-epilepsy (PSE) guidance):
+Enforced rules, from photosensitive-epilepsy (PSE) guidance:
 
   Fisher et al. (2022) "Visually sensitive seizures: an updated review by
     the Epilepsy Foundation", Epilepsia 63(4):739-768.
@@ -19,7 +19,7 @@ Enforced rules (proposal §4.B + photosensitive-epilepsy (PSE) guidance):
   Standards envelope: Ofcom Broadcasting Code guidance (UK, successor to
     the ITC), ISO 9241-391, ITU-R BT.1702-3, W3C WCAG 2.x SC 2.3.1.
 
-Known limits of this guard - please read before running a human session:
+Limits of this guard:
 
 1. Brightness is uncalibrated. Harding's flash criteria are conjunctive
    (luminance >=20 cd/m^2 AND >=3 Hz AND solid angle >=0.006 sr), and a
@@ -45,6 +45,15 @@ Known limits of this guard - please read before running a human session:
   (``max_brightness_step_per_s``).
 - Duty cycle (fill) in [0.0, 0.40] - high duty × high freq dramatically
   increases retinal load.
+- Steady light (``StimAction.steady``) is continuous illumination rather
+  than flicker: the duty ceiling does not apply because there is no
+  flicker to bound, and brightness is capped far lower instead
+  (``STEADY_BRIGHTNESS_MAX``). The flash criteria in the guidance above
+  are conjunctive on frequency, so unmodulated light does not meet them
+  at any luminance this device reaches; what remains is sustained
+  retinal exposure, which the tighter cap bounds. Time-averaged output
+  is lower than a flicker block's: 0.05 continuous against 0.40 × 0.40 =
+  0.16 for the brightest strobe.
 - Session hard timeout = 45 min by default.
 - Panic stop (UI button, /panic REST, or ESC) -> enabled=False, brightness=0,
   audio fadeout, session ends in `aborted` state.
@@ -66,6 +75,10 @@ PSE_BAND_LO = 15.0
 PSE_BAND_HI = 25.0
 BRIGHTNESS_MIN = 0.0
 BRIGHTNESS_MAX_V1 = 0.60
+# Ceiling for continuous, unmodulated light. Deliberately far below the
+# flicker ceiling: light that never goes off has no duty cycle to limit it,
+# so brightness is the only quantity bounding the retinal dose.
+STEADY_BRIGHTNESS_MAX = 0.10
 FILL_MIN = 0.0
 FILL_MAX = 0.40
 DEFAULT_SESSION_TIMEOUT_S = 45 * 60
@@ -87,6 +100,9 @@ class StimAction:
     frequency_hz: float = 10.0
     fill: float = 0.20
     brightness: float = 0.30
+    # Continuous light instead of a strobe. Scripted blocks set it; the
+    # policy cannot, because ``decode_action_for_deployment`` never does.
+    steady: bool = False
     color_white: int = 200       # white channel 0-255
     # audio side - controller already clips its own setters
     audio_strobe_depth_pct: float = 10.0
@@ -108,18 +124,9 @@ def decode_action_for_deployment(
     action,
     supervisor: "SafetySupervisor",
 ) -> "StimAction":
-    """Map the agent's normalized [-1, 1] action vector directly into the
-    supervisor's safe envelope, so the full action resolution is used
-    *within* safe bounds rather than wasted on values that would be
-    post-hoc clamped away.
-
-    Without this, action[2] ∈ [-1, 1] decodes naively to brightness ∈
-    [0, 1], and any value above ``brightness_max`` (e.g. 0.5 per study
-    config) gets silently clipped. The agent's gradient signal goes flat
-    above the cap, and the safety log fills with `brightness_bounds`
-    events even though nothing is wrong. By mapping +1 → brightness_max
-    and -1 → brightness_min up front, the same physical range is reached
-    with full resolution and no clamp noise.
+    """Map the agent's normalised [-1, 1] action vector directly into the
+    supervisor's safe envelope, so the full action resolution is spent
+    inside safe bounds: +1 is ``brightness_max``, -1 is ``brightness_min``.
 
     Audio params (action[3], action[4]) keep the plain [0, 100 %] mapping
     because there are no safety bounds on them - the deterministic audio
@@ -149,7 +156,7 @@ class SafetySupervisor:
 
     Every safety bound is a constructor field with the module-level
     constants as defaults. Use ``SafetySupervisor.from_config(cfg.safety)``
-    at session start to pull all 12 bounds from YAML. Callers that just
+    at session start to pull every bound from YAML. Callers that just
     do ``SafetySupervisor()`` get the conservative v1 defaults baked in
     at the top of this file.
     """
@@ -161,6 +168,7 @@ class SafetySupervisor:
     brightness_max: float = BRIGHTNESS_MAX_V1
     fill_min: float = FILL_MIN
     fill_max: float = FILL_MAX
+    steady_brightness_max: float = STEADY_BRIGHTNESS_MAX
     session_timeout_s: float = DEFAULT_SESSION_TIMEOUT_S
     max_freq_step_hz_per_s: float = MAX_FREQ_STEP_HZ_PER_S
     max_brightness_step_per_s: float = MAX_BRIGHTNESS_STEP_PER_S
@@ -211,8 +219,7 @@ class SafetySupervisor:
     def event_count(self) -> int:
         """Number of events logged so far, without copying the list.
 
-        Per-tick consumers (rollout harnesses counting how often the ramp
-        limiter bound) would otherwise pay O(n) per tick on ``events``.
+        ``events`` copies the list, which per-tick consumers pay for.
         """
         return len(self._events)
 
@@ -291,6 +298,7 @@ class SafetySupervisor:
             frequency_hz=action.frequency_hz,
             fill=action.fill,
             brightness=action.brightness,
+            steady=action.steady,
             color_white=int(max(0, min(255, action.color_white))),
             audio_strobe_depth_pct=action.audio_strobe_depth_pct,
             audio_binaural_vol_pct=action.audio_binaural_vol_pct,
@@ -327,17 +335,27 @@ class SafetySupervisor:
                       result.frequency_hz, new_freq, "freq_bounds")
         result.frequency_hz = new_freq
 
-        # 5) Fill clamp
-        new_fill = max(self.fill_min, min(self.fill_max, result.fill))
-        if abs(new_fill - result.fill) > 1e-6:
-            self._log(t_ms, "clamp", "fill", result.fill, new_fill, "fill_bounds")
-        result.fill = new_fill
+        # 5) Fill clamp. Steady light is continuous by definition, so the duty
+        #    ceiling - which bounds flicker load - has nothing to bound.
+        if result.steady:
+            result.fill = 1.0
+        else:
+            new_fill = max(self.fill_min, min(self.fill_max, result.fill))
+            if abs(new_fill - result.fill) > 1e-6:
+                self._log(t_ms, "clamp", "fill", result.fill, new_fill,
+                          "fill_bounds")
+            result.fill = new_fill
 
-        # 6) Brightness clamp
-        new_bri = max(self.brightness_min, min(self.brightness_max, result.brightness))
+        # 6) Brightness clamp. Continuous light carries its whole dose here,
+        #    so it answers to the lower of the two ceilings.
+        ceiling = min(self.brightness_max, self.steady_brightness_max) \
+                  if result.steady else self.brightness_max
+        new_bri = max(self.brightness_min, min(ceiling, result.brightness))
         if abs(new_bri - result.brightness) > 1e-6:
             self._log(t_ms, "clamp", "brightness",
-                      result.brightness, new_bri, "brightness_bounds")
+                      result.brightness, new_bri,
+                      "steady_brightness_bounds" if result.steady
+                      else "brightness_bounds")
         result.brightness = new_bri
 
         # 7) Ramp-rate limits relative to last applied action.

@@ -15,8 +15,10 @@ from app.agent.safety import (
     PSE_BAND_HI,
     PSE_BAND_LO,
     RAILED_PCT_DISCONNECT_THRESHOLD,
+    STEADY_BRIGHTNESS_MAX,
     SafetySupervisor,
     StimAction,
+    decode_action_for_deployment,
 )
 
 
@@ -88,3 +90,52 @@ def test_ramp_limit_caps_brightness_step():
     assert a2.brightness < 0.5
     assert any(e.kind == "ramp_limit" and e.field == "brightness"
                for e in sup.events)
+
+
+# ---- steady (unmodulated) light ------------------------------------------
+
+def test_steady_light_answers_to_its_own_lower_ceiling():
+    sv = SafetySupervisor(brightness_max=0.60)
+    out = sv.clamp(StimAction(enabled=True, steady=True, brightness=0.55))
+    assert out.brightness == pytest.approx(STEADY_BRIGHTNESS_MAX)
+    assert any(e.reason == "steady_brightness_bounds" for e in sv.events)
+
+
+def test_the_flicker_ceiling_still_applies_when_light_is_not_steady():
+    sv = SafetySupervisor(brightness_max=0.40)
+    out = sv.clamp(StimAction(enabled=True, steady=False, brightness=0.55))
+    assert out.brightness == pytest.approx(0.40)
+
+
+def test_steady_light_is_continuous_rather_than_duty_limited():
+    sv = SafetySupervisor()
+    out = sv.clamp(StimAction(enabled=True, steady=True, fill=0.2,
+                              brightness=0.05))
+    assert out.fill == pytest.approx(1.0)
+
+
+def test_steady_light_delivers_less_average_output_than_the_brightest_strobe():
+    sv = SafetySupervisor(brightness_max=0.40)
+    steady = sv.clamp(StimAction(enabled=True, steady=True, brightness=0.05))
+    sv.reset()
+    strobe = sv.clamp(StimAction(enabled=True, fill=0.40, brightness=0.40))
+    assert steady.fill * steady.brightness < strobe.fill * strobe.brightness
+
+
+def test_the_lower_of_the_two_ceilings_wins():
+    sv = SafetySupervisor(brightness_max=0.02)
+    out = sv.clamp(StimAction(enabled=True, steady=True, brightness=0.10))
+    assert out.brightness == pytest.approx(0.02)
+
+
+def test_the_policy_cannot_command_steady_light():
+    sv = SafetySupervisor()
+    out = decode_action_for_deployment([1.0, 1.0, 1.0, 0.0, 0.0], sv)
+    assert out.steady is False
+
+
+def test_panic_extinguishes_steady_light():
+    sv = SafetySupervisor()
+    sv.clamp(StimAction(enabled=True, steady=True, brightness=0.05))
+    out = sv.panic()
+    assert out.brightness == 0.0 and out.enabled is False

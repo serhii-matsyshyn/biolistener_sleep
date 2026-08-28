@@ -28,6 +28,7 @@ MONGO_DB = os.environ.get("MONGO_DB", "biolistener_sleep_dev")
 
 
 _client: Optional[AsyncIOMotorClient] = None
+_ping_client: Optional[AsyncIOMotorClient] = None
 
 
 def get_client() -> AsyncIOMotorClient:
@@ -40,6 +41,26 @@ def get_client() -> AsyncIOMotorClient:
 
 def get_db(db_name: Optional[str] = None) -> AsyncIOMotorDatabase:
     return get_client()[db_name or MONGO_DB]
+
+
+async def ping(timeout_ms: int = 800) -> bool:
+    """Whether the server answers, on a short leash.
+
+    The shared client is configured for real operations and waits 30 s before
+    giving up, which is far too long for a status check that the UI polls. This
+    uses its own client so an unreachable server is reported in under a second
+    and the caller is never blocked.
+    """
+    global _ping_client
+    if _ping_client is None:
+        _ping_client = AsyncIOMotorClient(
+            MONGO_URL, serverSelectionTimeoutMS=timeout_ms,
+            connectTimeoutMS=timeout_ms, socketTimeoutMS=timeout_ms)
+    try:
+        await _ping_client.admin.command("ping")
+        return True
+    except Exception:
+        return False
 
 
 async def init_indexes(db: AsyncIOMotorDatabase) -> None:

@@ -16,7 +16,9 @@ eeg:
   kind: biolistener            # UI overrides per-session via `eeg_source`
   ip_address: 0.0.0.0          # bind to all interfaces; device dials in
   ip_port: 12345
-  sampling_rate: 500
+  # Measured off the device's own timestamps, not the value it is asked
+  # for: commanding 500 yields 511.995 Hz on this board.
+  sampling_rate: 512
   pga_gain: 8
   # Channels physically wired to electrodes. Channels NOT in this list
   # are disabled on the device (command 2, enable 0) so they don't stream

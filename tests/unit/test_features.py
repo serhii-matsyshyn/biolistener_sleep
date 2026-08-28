@@ -67,3 +67,31 @@ def test_short_window_returns_zero_features():
     snap = extract_features(data, sampling_rate=sr, montage=OCCIPITAL_ALPHA)
     assert snap.alpha_pwr == 0.0
     assert snap.theta_pwr == 0.0
+
+
+class TestRailedDetection:
+    """
+    railed_pct gates G1, the abort monitor and the supervisor's disconnect
+    guard, so the detector's contract with BrainFlow is pinned here.
+    """
+
+    def test_a_railed_channel_is_detected(self):
+        import numpy as np
+        from app.eeg.features import _railed_percentage
+        fs, gain = 500, 8
+        full_scale_uv = 2_500_000.0 / gain
+        railed = np.full(4 * fs, full_scale_uv * 0.999)
+        assert _railed_percentage(railed, gain) > 50.0
+
+    def test_ordinary_eeg_is_not_railed(self):
+        import numpy as np
+        from app.eeg.features import _railed_percentage
+        rng = np.random.default_rng(0)
+        assert _railed_percentage(15.0 * rng.standard_normal(2000), 8) < 5.0
+
+    def test_railed_percentage_takes_a_channel_and_a_gain(self):
+        # A signature mismatch is swallowed by the module's fallback, so the
+        # contract with BrainFlow is pinned here.
+        import numpy as np
+        from brainflow.data_filter import DataFilter
+        DataFilter.get_railed_percentage(np.zeros(500, dtype=np.float64), 8)

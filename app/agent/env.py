@@ -8,15 +8,15 @@ Wraps:
 - Per-tick :func:`extract_features` + optional RESTFULNESS auxiliary
 - :func:`compute_reward` on the manual features only
 
-Designed so the SAME env shape can later wrap a real BoardShim stream
-+ real virtual/real mask + real audio engine for the eval/swap path -
-just substitute the EEG source and stim sinks.
+The observation built here is reproduced element for element by
+``app.protocol.runner`` on the deployment path; ``app.agent.obs_state``
+owns the smoothing both use.
 
 Observation space (float32):
     [alpha_pwr, theta_pwr, beta_pwr, hypnagogic_theta_pwr, sigma_pwr,
      theta_alpha_ratio, emg_rms, eog_energy, railed_pct,
      plv_strobe,
-     restfulness (auxiliary),
+     restfulness (auxiliary; only when include_restfulness),
      last_strobe_freq, last_strobe_fill, last_strobe_brightness]
 
 Action space (continuous, Box):
@@ -353,13 +353,10 @@ class SleepOnsetEnv(gym.Env):
         plv_val = self._plv(window=window)
 
         # Temporal smoothing of the noise-sensitive features
-        # White-noise EEG measurement inflates θ-band power disproportionately
-        # (because θ is normally small vs α), corrupting θ/α. Smoothing with
-        # τ=2s reduces single-tick spike impact by ~78% over 4 ticks while
-        # letting real trends propagate within ~6 ticks. We overwrite the raw
-        # features with the smoothed values so every downstream consumer
-        # (reward, observation, resonance shift) sees the SAME post-smoothed
-        # signal, avoiding distribution mismatch.
+        # White-noise measurement inflates θ-band power disproportionately
+        # (θ is normally small against α), corrupting θ/α. The raw features are
+        # overwritten with the smoothed values so reward, observation and
+        # resonance shift all read the same signal.
         self._obs_state.update(
             raw_theta_alpha=float(features.theta_alpha_ratio),
             raw_plv=float(plv_val),
@@ -397,10 +394,6 @@ class SleepOnsetEnv(gym.Env):
         if self._restfulness is not None:
             obs_parts.append(np.array([rest_val], dtype=np.float32))
         obs_parts.append(np.array(last, dtype=np.float32))
-        # Temporal context: smoothed PLV + Δ(smoothed θ/α) over last ~2s.
-        # The agent now explicitly sees the trend, not only the
-        # instantaneous values, so a 1-tick noise spike doesn't determine
-        # action selection - sustained changes do.
         obs_parts.append(np.array(self._obs_state.temporal_context(),
                                     dtype=np.float32))
         obs = np.concatenate(obs_parts)
@@ -450,8 +443,7 @@ class SleepOnsetEnv(gym.Env):
                       window: Optional[np.ndarray] = None) -> float:
         """Diagnostic PLV at a harmonic of the strobe frequency.
 
-        Report-only: never enters the observation vector or the reward, so
-        adding it leaves trained policies bit-identical.
+        Report-only: never enters the observation vector or the reward.
         """
         if window is None:
             if self._buf_filled:

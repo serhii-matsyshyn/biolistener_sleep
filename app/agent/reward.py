@@ -5,14 +5,11 @@ Thesis goal: drive the user from wake into N1 hypnagogia. The intended way
 to climb is to ramp the strobe down through the sleep-conducive bands while
 the brain follows, rather than parking at high-α with good phase-locking.
 
-The reward does order policies as intended - descend > park-in-theta >
-park-at-alpha > nothing - but it is not zero for an inert device: the
-sustained-level term also pays for the endogenous theta/alpha rise that no
-policy causes, so a switched-off device still earns 16-34% of a descending
-ramp's return and a constant 4 Hz strobe 78-83% of it. That free component
-is a subject-level random effect (0.005 to 601.7 across 12 subjects), not a
-constant offset, so controller headroom (~17-22%) must always be quoted
-together with the stimulation dose it was measured at.
+The reward orders policies as intended: descend > park-in-theta >
+park-at-alpha > no stimulation. The sustained-level term is a level rather
+than a delta, so it also pays for endogenous theta/alpha rise; the return of
+an inert device is therefore non-zero and subject-dependent. Arm comparisons
+are reported against the delivered dose for that reason.
 
 Term-by-term:
 
@@ -28,12 +25,9 @@ Term-by-term:
    earns zero, PLV at 6 Hz earns the full coefficient. Closes the
    loophole where the policy could collect a constant PLV trickle at
    wake-frequency.
-5. ``+k · (prev_freq − curr_freq)`` - frequency-descent shaping. Signed,
-   not clamped: it telescopes to k·(f0−fT) and is path-independent, whereas
-   a clamped max(0,·) form would pay for down-travel and reward oscillation.
-   Tiny per-tick reward for ramping the strobe DOWN, zero for holds,
-   negative for upward jumps (the SafetySupervisor's ramp-rate cap
-   bounds this so the agent can't game it with infinite-rate descents).
+5. ``+k · (prev_freq − curr_freq)`` - frequency-descent shaping, signed.
+   Positive for ramping down, zero for holds, negative for upward jumps;
+   the SafetySupervisor's ramp-rate cap bounds it.
 6. ``k_disconnect`` (large negative) - electrode-disconnect bailout.
 
 There is no EMG penalty: the v1 BioListener montage has no dedicated EMG
@@ -60,8 +54,7 @@ THETA_ALPHA_BASELINE = 1.0
 class RewardWeights:
     """Default coefficients - tunable per training experiment.
 
-    Two extra fields enable the **ablation-study baselines** (the
-    masters-defence "show that naive rewards get exploited" figure):
+    Two fields configure the ablation baselines:
 
     - ``k_alpha_pwr``: rewards raw α band power. Off (0) for the
       shaped reward; ON for the ``naive_alpha_max`` variant, where the

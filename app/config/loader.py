@@ -157,7 +157,7 @@ def _env_overrides(env: Dict[str, str]) -> List[tuple[List[str], Any]]:
 
     Double underscore is the section/field separator (pydantic-settings
     convention). The legacy ``BIOLISTENER_SLEEP_ENABLE_AUDIO`` is kept for
-    backward-compat with the env shim added in M6+.
+    backward compatibility with the environment shim.
     """
     out: List[tuple[List[str], Any]] = []
     for k, v in env.items():

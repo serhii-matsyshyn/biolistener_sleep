@@ -50,12 +50,16 @@ mlflow.db-shm
 .env.*
 !.env.example
 
-project_files
+/project_files/
 data/external_tracks/source
 
-*future*
+notebooks/future/
+scripts/future/
 
 backup_*
-downloads
-data/images/in_progress
-tools/temp
+/downloads/
+data/images/in_progress/
+tools/temp/
+
+data/sessions/
+data/rehearsals/

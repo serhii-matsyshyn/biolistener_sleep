@@ -46,7 +46,7 @@ def test_change_params_roundtrip():
     )
     try:
         server.start()
-        # Wait for discovery + pin client target so send_command knows where
+        # Wait for discovery, then pin the device port commands are sent to
         deadline = time.time() + 5
         while time.time() < deadline and client.board_ip is None:
             time.sleep(0.05)
@@ -113,10 +113,10 @@ def test_get_params_reply():
 
 def test_pse_band_acceptance_at_protocol_level():
     """
-    Virtual mask is as-original hardware - it ACCEPTS any frequency including PSE
-    band (15-25 Hz). The SafetySupervisor (added in M3) is what blocks
-    dangerous commands BEFORE they leave the agent. This test pins that
-    contract: device-side safety isn't where we enforce it.
+    The virtual mask mirrors the hardware, which accepts any frequency
+    including the PSE band (15-25 Hz). The SafetySupervisor blocks dangerous
+    commands before they leave the agent. This test pins that contract:
+    device-side safety is not where it is enforced.
     """
     ctrl_port, dev_port = 20050, 20051
     client = MaskClient(bind_ip="127.0.0.1", port=ctrl_port)
@@ -144,3 +144,60 @@ def test_pse_band_acceptance_at_protocol_level():
         server.stop()
         server.join(timeout=2)
         client.stop()
+
+
+def test_the_reply_listener_survives_a_transient_socket_error():
+    """
+    On UDP an ICMP unreachable is reported on the next recvfrom. The listener
+    must survive it: sends keep succeeding regardless of delivery, so a dead
+    listener is indistinguishable from a mask that stopped answering.
+    """
+    import time
+    from app.mask.client import MaskClient
+    from app.mask.virtual import VirtualMaskServer
+
+    seen = []
+    client = MaskClient(bind_ip="127.0.0.1", port=22410,
+                        target_ip="127.0.0.1", on_params=lambda m: seen.append(m))
+    client.port = 22411                      # nothing here yet -> unreachable
+    try:
+        for _ in range(6):                   # provoke the error path
+            client.get_params()
+            time.sleep(0.1)
+        vm = VirtualMaskServer(listen_ip="127.0.0.1", listen_port=22411,
+                               controller_addr=("127.0.0.1", 22410))
+        vm.start()
+        time.sleep(0.3)
+        try:
+            for _ in range(10):              # the listener must still be alive
+                client.get_params()
+                time.sleep(0.15)
+                if seen:
+                    break
+            assert seen, "listener died on the earlier unreachable errors"
+        finally:
+            vm.stop()
+    finally:
+        client.stop()
+
+
+def test_leaving_the_context_manager_switches_the_strobe_off():
+    import time
+    from app.mask.client import MaskClient
+    from app.mask.virtual import VirtualMaskServer
+    vm = VirtualMaskServer(listen_ip="127.0.0.1", listen_port=22421,
+                           controller_addr=("127.0.0.1", 22420))
+    vm.start()
+    time.sleep(0.3)
+    try:
+        with MaskClient(bind_ip="127.0.0.1", port=22420,
+                        target_ip="127.0.0.1") as m:
+            m.port = 22421
+            m.update_params(enabled=True, frequency=10.0, brightness=0.6)
+            time.sleep(0.3)
+            assert vm.snapshot().enabled is True
+        time.sleep(0.3)
+        s = vm.snapshot()
+        assert s.enabled is False and s.brightness == 0.0
+    finally:
+        vm.stop()

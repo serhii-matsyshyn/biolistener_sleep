@@ -133,6 +133,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="BioListener Sleep - Daemon", lifespan=lifespan)
 
 
+@app.get("/api/health")
+async def health() -> dict:
+    """Dependencies the UI needs to know about before a request hangs on them.
+
+    Sessions, subjects and every recorded artefact live in Mongo; the hardware
+    protocol runner does not touch it. Reported per dependency so the banner can
+    say which page is affected rather than just that something is wrong.
+    """
+    from app.persistence.mongo import MONGO_DB, MONGO_URL, ping
+    ok = await ping()
+    return {
+        "mongo": {"ok": ok, "url": MONGO_URL, "db": MONGO_DB},
+        "protocol_runner": {"ok": True},
+    }
+
+# Hardware-session protocols (validation + experimental). Separate router so the
+# session machinery above is untouched; it refuses to start while one is live.
+from app.runtime.protocol_api import router as _protocol_router  # noqa: E402
+app.include_router(_protocol_router)
+
+
 @app.post("/api/subjects")
 async def create_subject(payload: dict):
     code = payload.get("code")
@@ -467,15 +488,14 @@ def _parse_eeg_source(spec: str) -> tuple[str, str, int]:
     ``"sim"``                              -> ("sim", "127.0.0.1", 0)
     ``"biolistener"``                      -> ("biolistener", <daemon eeg.ip_address>, <daemon eeg.ip_port>)
                                               (ping-discovery on the YAML-configured interface; default 0.0.0.0:12345)
-    ``"biolistener:192.168.1.42:12345"``   -> ("biolistener", "192.168.1.42", 12345)
+    ``"biolistener:192.0.2.10:12345"``   -> ("biolistener", "192.0.2.10", 12345)
     """
     if spec == "sim":
         return "sim", "127.0.0.1", 0
     if spec == "biolistener":
-        # Bare token = use daemon-wide YAML defaults. Without this branch
-        # the parser used to silently fall back to sim, which is the worst
-        # possible failure mode: NMM samples stream while the operator
-        # thinks the device is live.
+        # Bare token = use daemon-wide YAML defaults. Falling back to sim
+        # here would be the worst failure mode available: NMM samples stream
+        # while the operator believes the device is live.
         if RESOLVED_CONFIG is not None:
             return ("biolistener",
                     RESOLVED_CONFIG.eeg.ip_address,
@@ -495,7 +515,7 @@ def _parse_mask_target(spec: str) -> tuple[str, str, int]:
     """
     ``"virtual"``                       -> ("virtual", "127.0.0.1", 20000)
     ``"esp32"``                         -> ("esp32",   "",          20000)  (ping discovery - no IP needed)
-    ``"esp32:192.168.1.43:20000"``      -> ("esp32",   "192.168.1.43", 20000)
+    ``"esp32:192.0.2.11:20000"``      -> ("esp32",   "192.0.2.11", 20000)
     """
     if spec == "virtual":
         return "virtual", "127.0.0.1", 20000

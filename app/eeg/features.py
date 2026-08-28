@@ -12,8 +12,7 @@ Uses BrainFlow's ``DataFilter`` for filtering / PSD / band-power
 - EOG energy - high-frequency oscillation in front polar channels
 - Railed-percentage check for electrode-disconnect detection
 
-The exact filter chain mirrors the user's existing BioListener
-visualization script (already validated on real BioListener data):
+Filter chain, applied identically on the training and deployment paths:
     detrend(CONSTANT) -> bandpass(3–45, Butterworth zero-phase, order=2)
     -> bandstop(48–52)   (EU grid)
     -> bandstop(58–62)   (US grid)
@@ -40,11 +39,16 @@ logger = logging.getLogger("eeg.features")
 # Frequency bands (Hz)
 BAND_DELTA = (1.0, 4.0)
 BAND_THETA = (4.0, 8.0)
-BAND_HYPNAGOGIC_THETA = (4.0, 7.0)   # proposal §3.B - drowsy θ
+BAND_HYPNAGOGIC_THETA = (4.0, 7.0)   # drowsy θ
 BAND_ALPHA = (8.0, 13.0)
 BAND_SPINDLE_SIGMA = (12.0, 16.0)    # sleep-spindle band
 BAND_BETA = (13.0, 30.0)
 BAND_GAMMA = (30.0, 45.0)
+
+# Amplifier gain assumed when the caller does not say. Matches the value
+# `configs/daemon_prod.yaml` sends to the device, so the railed detector
+# reconstructs the right ADC full scale.
+DEFAULT_PGA_GAIN = 8
 
 
 # --- stimulus-artifact diagnostic -------------------------------------------
@@ -60,8 +64,7 @@ STIM_NOTCH_HARMONICS: tuple = (1, 2, 3)
 # theta band is only ~4 bins wide, and a Blackman-Harris main lobe spans ~3
 # bins, so the stimulus peak cannot be separated from the band it sits in.
 # At nfft=1024 (bin width ~0.49 Hz) theta is ~8 bins, excising +/-1 bin
-# captures ~94% of a pure tone, and the band-loss control comes out clean
-# (measured: 0.0% band loss vs -28% at the production resolution).
+# captures ~94% of a pure tone.
 # Welch still averages ~3 segments over the 4 s window at this size.
 DIAG_NFFT_MAX = 1024
 
@@ -186,12 +189,10 @@ def _decoy_centres(
     """
     Stimulus-free frequencies for the band-loss control, one per harmonic.
 
-    A fixed offset is not safe: at coarse resolution a nearby decoy lands on
-    the shoulder of the real peak, so its interpolation anchors sit inside
-    the leakage skirt and the control reports *negative* band loss. Each
-    decoy is therefore placed by searching outward from its harmonic for the
-    first slot separated from every true centre - and from every decoy
-    already placed - by more than one excision width.
+    Each decoy is placed by searching outward from its harmonic for the first
+    slot separated from every true centre - and from every decoy already
+    placed - by more than one excision width, so no decoy's interpolation
+    anchors sit inside a real peak's leakage skirt.
     """
     sep = (2 * halfwidth_bins + 2) * df
     placed: list = []
@@ -267,7 +268,7 @@ def stim_artifact_diagnostic(
 
 
 def _filter_chain(channel: np.ndarray, sampling_rate: int) -> np.ndarray:
-    """User-validated chain (mirrors the existing BioListener viz script)."""
+    """Detrend, bandpass 3-45 Hz, notch both mains frequencies."""
     DataFilter.detrend(channel, DetrendOperations.CONSTANT.value)
     DataFilter.perform_bandpass(channel, sampling_rate, 3.0, 45.0, 2,
                                 FilterTypes.BUTTERWORTH_ZERO_PHASE.value, 0)
@@ -284,6 +285,7 @@ def extract_features(
     montage: Montage,
     t_ms: int = 0,
     stim_notch_hz: Optional[float] = None,
+    pga_gain: int = DEFAULT_PGA_GAIN,
 ) -> FeatureSnapshot:
     """
     Compute the per-tick observation vector.
@@ -320,7 +322,7 @@ def extract_features(
 
     nfft = DataFilter.get_nearest_power_of_two(sampling_rate)
     if n_samples < nfft:
-        # Pad-or-clamp: if user gave us less than one FFT window, downsize nfft
+        # Fewer samples than one FFT window: downsize nfft rather than pad.
         nfft = 1 << (n_samples - 1).bit_length() >> 1
         nfft = max(nfft, 64)
 
@@ -330,7 +332,7 @@ def extract_features(
 
     for ch_idx in montage.primary_eeg_channels:
         ch = data[ch_idx].copy().astype(np.float64)
-        railed_vals.append(_railed_percentage(ch, sampling_rate))
+        railed_vals.append(_railed_percentage(ch, pga_gain))
         _filter_chain(ch, sampling_rate)
         psd = DataFilter.get_psd_welch(
             ch, nfft, nfft // 2, sampling_rate,
@@ -423,14 +425,48 @@ def _emg_rms(data: np.ndarray, montage: Montage,
     return _safe_band_power(psd, *BAND_GAMMA)
 
 
-def _railed_percentage(channel: np.ndarray, sampling_rate: int) -> float:
-    """Wrapper around BrainFlow's get_railed_percentage. Returns 0..100."""
+# Reading at or above this fraction of full scale on the *uncorrected* signal
+# means the offset has consumed the converter and clipping is either happening
+# or imminent - the point at which the DC component stops being harmless.
+SATURATION_PCT = 95.0
+
+
+def _railed_percentage(channel: np.ndarray, pga_gain: int = DEFAULT_PGA_GAIN) -> float:
+    """How much of the converter's range the *signal* needs, 0..100.
+
+    ``get_railed_percentage(data, gain)`` reconstructs ADC full scale from the
+    amplifier gain, so it must be the gain the device is running at. It reports
+    ``max|x|`` against that scale, which on a real head is almost entirely the
+    electrode's half-cell potential: measured at 15.7 % offset against 0.3 %
+    signal, with 84 % of the range still free. That potential drifts by tens of
+    millivolts over a session, is removed completely by the 3-45 Hz chain every
+    feature is computed from, and says nothing about whether the recording is
+    usable. Scoring it as though it did aborts good sessions.
+
+    So the offset is subtracted first and the answer describes the signal. Two
+    failures still have to register, and do: an electrode that floats and swings
+    is large after subtraction, and one pinned against a rail is caught by
+    ``SATURATION_PCT`` on the uncorrected trace, where subtracting the offset
+    would otherwise hide it as a flat line.
+    """
     try:
-        return float(DataFilter.get_railed_percentage(
-            channel, sampling_rate, sampling_rate,
-        ))
+        x = np.ascontiguousarray(np.asarray(channel, dtype=np.float64))
+        gain = int(pga_gain)
+        # Median, not mean: a run of clipped samples must not drag the
+        # reference point towards the rail it is meant to detect.
+        ac = np.ascontiguousarray(x - np.median(x))
+        signal = float(DataFilter.get_railed_percentage(ac, gain))
+        headroom = float(DataFilter.get_railed_percentage(x.copy(), gain))
+        if headroom >= SATURATION_PCT:
+            return max(signal, headroom)
+        return signal
     except Exception:
-        # Older BrainFlow versions may lack this - fall back to manual estimate
+        # Fallback is scale-free and reads near zero on any signal, so a
+        # silent fall-through here would disable every railed check
+        # downstream. Log it rather than substituting a plausible number.
+        logger.warning("get_railed_percentage unavailable - railed checks "
+                       "are running on a scale-free approximation",
+                       exc_info=True)
         amax = float(np.abs(channel).max() + 1e-12)
         clipped = np.sum(np.abs(channel) > 0.95 * amax)
         return 100.0 * clipped / len(channel)
@@ -440,7 +476,7 @@ def feature_vector(snap: FeatureSnapshot) -> np.ndarray:
     """
     Convert FeatureSnapshot -> fixed-length numeric vector for the RL agent
     observation. Order is stable for the lifetime of the project - if you
-    add a feature, append it; don't reorder.
+    add a feature, append it; the order never changes.
     """
     return np.array([
         snap.alpha_pwr,

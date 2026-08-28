@@ -11,8 +11,7 @@ Reads the per-session folder produced by the live daemon and reconstructs:
    audio_seed.json - pyo Server in render mode (`recordOptions`) outputs
    audio.wav byte-identical to what played live.
 
-Determinism is verified by the byte-equality
-test that lives in tests/integration/test_replay_determinism.py.
+Re-rendering the same session twice produces the same output.
 """
 from __future__ import annotations
 

@@ -69,8 +69,18 @@ class MaskClient:
                 data, addr = self.sock.recvfrom(2048)
             except socket.timeout:
                 continue
-            except OSError:
-                break
+            except OSError as err:
+                # A UDP send to a port nothing is bound to comes back as an
+                # ICMP unreachable, which Linux reports on the *next* recvfrom.
+                # Breaking here would end the listener for good on a single
+                # transient error - commands would keep going out while every
+                # reply was lost, which reads exactly like a healthy mask that
+                # has stopped answering. Only a deliberate close ends the loop.
+                if not self.running:
+                    break
+                logger.debug("recv failed (%s); continuing", err)
+                time.sleep(0.05)
+                continue
             try:
                 msg = json.loads(data.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
@@ -143,4 +153,13 @@ class MaskClient:
         return self
 
     def __exit__(self, *_exc) -> None:
+        # Leave the device dark whatever happened. This has to run before the
+        # socket closes, so it belongs here rather than in the caller's own
+        # cleanup - a strobe left flashing on a sleeping face outranks
+        # whatever else the caller still wants to tidy up.
+        try:
+            self.update_params(enabled=False, brightness=0.0)
+        except Exception:
+            logger.debug("could not switch the strobe off on exit",
+                         exc_info=True)
         self.stop()

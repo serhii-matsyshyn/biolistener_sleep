@@ -12,6 +12,7 @@ import LiveRoute from "./routes/live";
 import SessionsRoute from "./routes/sessions";
 import SubjectsRoute from "./routes/subjects";
 import DemoOpenLoopRoute from "./routes/demo_open_loop";
+import ProtocolRoute from "./routes/protocol";
 
 const theme = createTheme({
   primaryColor: "teal",
@@ -35,6 +36,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route index element={<Navigate to="/live" replace />} />
               <Route path="live" element={<LiveRoute />} />
               <Route path="live/:sessionId" element={<LiveRoute />} />
+              <Route path="protocol" element={<ProtocolRoute />} />
               <Route path="sessions" element={<SessionsRoute />} />
               <Route path="subjects" element={<SubjectsRoute />} />
               <Route path="demo-open-loop" element={<DemoOpenLoopRoute />} />

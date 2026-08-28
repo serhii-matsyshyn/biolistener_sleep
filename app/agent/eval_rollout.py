@@ -219,9 +219,8 @@ def summary(df: pd.DataFrame) -> dict:
     if df.empty:
         return {"n_episodes": 0}
     # Frequency metrics read DELIVERED stimulation, not the commanded
-    # register: an arm with the light off still holds a frequency value,
-    # which would otherwise be scored as a successful descent on zero
-    # photic energy.
+    # register: an arm with the light off still holds a frequency value, and
+    # a descent on zero photic energy is not a descent.
     d = df.copy()
     delivered = (d["fill"] > 0.0) & (d["brightness"] > 0.0)
     if "enabled" in d.columns:
@@ -235,9 +234,9 @@ def summary(df: pd.DataFrame) -> dict:
         frac_delivering=("strobe_freq_hz", lambda c: float(c.notna().mean())),
     )
     # One subset for every field. `agg("last")` skips NaN, so `final_strobe` is the
-    # last DELIVERING tick; an episode that never delivered has NaN there. Drop those
-    # episodes from every frequency statistic rather than letting the medians use one
-    # subset while frac_below_* silently counted NaN as a failure.
+    # last DELIVERING tick; an episode that never delivered has NaN there.
+    # Those episodes are dropped from every frequency statistic, so the medians
+    # and frac_below_* are computed over the same subset.
     delivering_eps = by_ep["final_strobe"].notna()
     by_f = by_ep[delivering_eps]
     return {

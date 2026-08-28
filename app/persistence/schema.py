@@ -25,7 +25,7 @@ class SessionProtocol(str, Enum):
 
     The EEG/mask source dimension is captured separately by the
     ``eeg_source`` and ``mask_target`` fields (e.g. ``"sim"`` vs
-    ``"biolistener:192.168.1.42:12345"``). There is no longer a
+    ``"biolistener:192.0.2.10:12345"``). There is no longer a
     redundant ``mode`` enum on top of those.
     """
     baseline_no_stim = "baseline_no_stim"   # no strobe, no entrainment audio
@@ -57,8 +57,8 @@ class Session(_Doc):
     ended_at: Optional[datetime] = None
     protocol: SessionProtocol = SessionProtocol.rl_agent
     protocol_params: dict = Field(default_factory=dict)
-    eeg_source: str        # e.g. "biolistener:192.168.1.42:12345" | "sim"
-    mask_target: str       # e.g. "esp32:192.168.1.43:20000" | "virtual"
+    eeg_source: str        # e.g. "biolistener:192.0.2.10:12345" | "sim"
+    mask_target: str       # e.g. "esp32:192.0.2.11:20000" | "virtual"
     audio_enabled: Optional[bool] = None
     """True/False to force; None -> daemon auto-derives from eeg_source
     (any real hardware -> audio on, sim/playback -> off)."""

@@ -91,7 +91,7 @@ class PhoticInputConfig:
     ``cortical_gain`` is the multiplier from effective_amplitude -> input
     current on the EI population. Real inter-individual variability is
     large - some people are strong SSVEP responders, others are
-    non-responders (proposal §4.B "Subjective Variability"). Domain
+    non-responders. Domain
     randomization samples this widely.
 
     The **frequency response** is a Gaussian centered on the effective

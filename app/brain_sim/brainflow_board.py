@@ -47,7 +47,7 @@ logger = logging.getLogger("brain_sim.brainflow_board")
 PACKET_HEADER = 0xA0
 PACKET_FOOTER = 0xC0
 PACKET_TYPE_BIOSIGNALS = 1
-ADC_S_ID_ADS131M08 = 0
+ADC_S_ID = 0        # s_id field of the BioListener packet, per the emulator
 
 PACKET_FORMAT = "=1B 1I 1B 1I 1B 8I 1B"
 
@@ -59,10 +59,13 @@ def volts_to_adc_code(
     adc_resolution: float = 16_777_216.0,
 ) -> int:
     """
-    Inverse of BrainFlow's ADC-code-to-microvolts conversion for ADS131M08.
+    Inverse of the ADC-code-to-microvolts conversion, so the simulated device
+    encodes what BrainFlow will decode.
 
-    Default reference 2.5V (in µV) and 24-bit ADC resolution match the
-    BioListener emulator the user provided.
+    Reference 2.5 V and 24-bit resolution match the BioListener emulator this
+    mirrors. Only the round trip has to agree: the simulated path is compared
+    against itself, and the hardware path takes its scale from a measurement
+    rather than from these constants.
     """
     resolution = ref_uv / (adc_resolution * pga_gain)
     if voltage_uv >= 0:
@@ -235,7 +238,7 @@ class NMMBioListenerDevice(threading.Thread):
             ts_ms,
             PACKET_TYPE_BIOSIGNALS,
             self._packet_num,
-            ADC_S_ID_ADS131M08,
+            ADC_S_ID,
             *codes,
             PACKET_FOOTER,
         )
