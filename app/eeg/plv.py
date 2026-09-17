@@ -129,7 +129,7 @@ def plv_strobe_harmonic(
 
     Reporting f and 2f side by side also helps separate genuine neural
     entrainment from stimulus-locked contamination on real hardware: a
-    photoelectric or photomyogenic artifact tracks the drive waveform's
+    photoelectric or photomyoclonic artifact tracks the drive waveform's
     own harmonic structure, whereas a neural response need not.
 
     This is a **diagnostic** measure. It is deliberately kept out of the

@@ -2,7 +2,7 @@
 
 # BioListener Sleep: Closed-Loop Neural Stimulation System for Sleep Onset Optimization Using Deep Reinforcement Learning
 
-A real-time closed-loop neuro-stimulation system that adapts audio-visual entrainment to the subject's live EEG, with the goal of reaching sleep onset (N1) as fast as possible. The system is built on top of the [BioListener](https://github.com/serhii-matsyshyn/biolistener) EEG board and a stroboscopic LED mask (firmware: [biolistener_sleep_mask_firmware](https://github.com/serhii-matsyshyn/biolistener_sleep_mask_firmware)) driven over the network from a Python daemon.
+A real-time closed-loop neuro-stimulation system that adapts audio-visual entrainment to the subject's live EEG, whose control objective is to steer that EEG toward a drowsiness biomarker. Arousal in the simulator is exogenous, so no result here bears on sleep-onset latency. The system is built on top of the [BioListener](https://github.com/serhii-matsyshyn/biolistener) EEG board and a stroboscopic LED mask (firmware: [biolistener_sleep_mask_firmware](https://github.com/serhii-matsyshyn/biolistener_sleep_mask_firmware)) driven over the network from a Python daemon.
 
 Pre-sleep sensory entrainment has partial precedent. Halpin et al. delivered 10 Hz stimulation before sleep as either flickering light or binaural beats, reporting a 13-minute drop in diary-recorded sleep-onset latency in an uncontrolled feasibility study ([2023](https://doi.org/10.3389/fpain.2023.1096084)), then confirmed the entrainment effect itself against a non-rhythmic sham under masked home wearable-EEG conditions ([2025](https://doi.org/10.1016/j.jpain.2025.105393)). Two caveats matter for reading them as support for this system: participants overwhelmingly chose the audio option over the visual one, and in the controlled study the sleep-onset effect was significant on diary but null on wearable EEG and actigraphy. Photic entrainment against objectively measured sleep-onset latency is therefore still largely untested. This work does not attempt to settle that question - establishing efficacy needs a powered, sham-controlled clinical trial, which is a different project. What it addresses is the control problem sitting upstream of any such trial: if a policy is going to drive stimulation from live EEG, what should it optimise, and what happens when that objective is specified naively?
 
@@ -15,7 +15,7 @@ The research contribution of this project is **reward design for closed-loop ada
 - **A scripted ramp beats the learned controller on its own objective, but much of that is light.** Evaluated on the reward the policy was trained to maximise, over 100 held-out subjects: a scripted 11 to 4 Hz linear ramp scores a median 48.5 return units above the learned policy (win rate 0.33, p = 4.8e-06). The policy does clear a constant 4 Hz strobe (+91.7, p = 4.2e-12), which is the baseline such systems are usually compared against. The open-loop arms deliver 49% more photic energy: scaling the ramp's brightness to the policy's dose costs it 31.4 units, and against the ramp so scaled the deficit is 24.4 and no longer significant (p = 0.097). Against its own commands replayed to a different subject at identical dose the policy is 4.7 ahead, an interval that includes zero. A term-by-term decomposition places the gap in the sustained theta/alpha level term rather than in phase locking: the policy spends 11.4% of ticks below the 4 Hz credited edge and 81.9% inside the credited band against the ramp's 57.1%, so mistimed descent is not the cause. Training reaches a plateau by 300k steps (final-third slope p >= 0.077).
 - **Simulated subjects are heterogeneous by design.** Each subject draws a transition timescale lognormally: p10 98 s, p50 302 s, p90 944 s, a spread of 9.6. The 300 s episode is therefore a *window* onto a longer process, and the cohort contains subjects who reach their arousal floor inside it, subjects mid-transition at its end, and subjects who barely move. The time axis is normalised to the episode and is **not** calibrated to clock-time sleep-onset latency; no result here is expressed in minutes to sleep onset.
 - **The resonance-shift assumption is a modelling hypothesis, and it is not swept here.** The simulator slides the photic resonance peak toward theta as drowsiness rises, which raises the obvious objection that a reported descent could be an artefact of that coupling. Results here are obtained at a single value of the coupling gain; [tools/run_shift_ablation.py](tools/run_shift_ablation.py) re-runs a policy with the coupling disabled for anyone wanting to test it.
-- **The actuator ramp cap is a conservative engineering choice, not a tuned parameter.** Deployment uses 0.5 Hz/s. Ramping rather than stepping is standard practice in audio-visual entrainment protocols, recommended "to reduce startle and fatigue" (Rahmani et al. 2025), but no published rate exists for photic frequency transitions, so the value awaits perceptual calibration. All results reported here use this single setting; the cap admits the 0.023 Hz/s descent of the scripted ramp, so no arm is constrained by it.
+- **The actuator ramp cap is a conservative engineering choice, not a tuned parameter.** Deployment uses 0.5 Hz/s. Ramping rather than stepping is standard practice in audio-visual entrainment protocols, recommended "to reduce startle and fatigue" (Rahmani et al. 2025), but no published rate exists for photic frequency transitions, so the value awaits perceptual calibration. All results reported here use this single setting; the cap admits the 0.023 Hz/s descent of the scripted ramp, but it does bind the learned arm, on 88.7 % of ticks against the ramp's 0.0 %.
 - **The brain simulator's implementation is cross-validated against the canonical reference.** Our hand-coded simulator follows the canonical Jansen & Rit (1995) equations verbatim. We cross-validated against TVB (The Virtual Brain) - the standard NMM library in computational neuroscience - and both implementations place the alpha peak in the same spectral bin at 10.74 Hz with log-PSD correlation > 0.9. The implementation is reliable. The scope of this check is implementation fidelity against a reference implementation - the simulator's role here is as a control testbed for policy and safety-supervisor development.
 
 ## Methods
@@ -68,6 +68,8 @@ Optional infrastructure for full-feature runs:
 ### 1. Reproduce the reward-ablation sweep
 
 ```bash
+# NOTE: this script is the ORIGINAL 12-run sweep (4 variants x 3 seeds, 100k steps).
+# The reported results are the 4 x 5-seed, 300 000-step cohort; see configs/ablation_*.yaml.
 # 12 SAC training runs (4 reward variants x 3 seeds) at 5-min episodes; ~2 hr on 16 cores
 bash tools/run_ablation.sh
 
@@ -76,7 +78,7 @@ python tools/derive_cohort.py
 
 # Cross-subject consistency on 100 fresh DR subjects; ~30 min
 biolistener-sleep eval \
-    --checkpoint app/agent/checkpoints/sac_full_shaped_seed3_<...>.zip \
+    --checkpoint app/agent/checkpoints/sac_full_shaped_seed2_1785433475.zip \
     --n 100 --episode-s 300 \
     --out artifacts/full_shaped_rollouts.parquet
 
@@ -116,7 +118,7 @@ The Live page surfaces the 4 Hz control-loop tick-budget probe (last and max com
 
 ## Status
 
-This is research code in active development. It has been validated in simulation and on the integration test harness; real-subject sessions are run as a feasibility appendix to the thesis, not as the primary evidence. The architecture is intentionally clear about scope: the simulation experiments are the *experimental method* (statistical power that a limited number of human sessions cannot match); the hardware testbed is the *deployment and demonstration platform*.
+This is research code in active development. It has been validated in simulation and on the integration test harness; real-subject sessions are a feasibility check only, not as the primary evidence. The architecture is intentionally clear about scope: the simulation experiments are the *experimental method* (statistical power that a limited number of human sessions cannot match); the hardware testbed is the *deployment and demonstration platform*.
 
 ## Related repositories
 

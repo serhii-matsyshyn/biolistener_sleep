@@ -13,7 +13,7 @@ are reported against the delivered dose for that reason.
 
 Term-by-term:
 
-1. ``Δ(θ/α)``  - the validated drowsiness biomarker's rate of change.
+1. ``Δ(θ/α)``  - a candidate drowsiness biomarker's rate of change.
    Positive when drowsiness biomarker grows tick-over-tick.
 2. ``(θ/α − 1.0)+``  - sustained-level bonus. Keeps paying out while
    the ratio stays high, so the agent doesn't learn to oscillate it
