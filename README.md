@@ -1,6 +1,6 @@
 ![BioListener Logo](data/images/BioListener_Logo_1920х200.jpg "BioListener Logo")
 
-# BioListener Sleep: Closed-Loop Neural Stimulation System for Sleep Onset Optimization Using Deep Reinforcement Learning
+# BioListener Sleep: Intelligent Closed-Loop Neural Stimulation System for Sleep Onset Optimization Using Deep Reinforcement Learning
 
 A real-time closed-loop neuro-stimulation system that adapts audio-visual entrainment to the subject's live EEG, whose control objective is to steer that EEG toward a drowsiness biomarker. Arousal in the simulator is exogenous, so no result here bears on sleep-onset latency. The system is built on top of the [BioListener](https://github.com/serhii-matsyshyn/biolistener) EEG board and a stroboscopic LED mask (firmware: [biolistener_sleep_mask_firmware](https://github.com/serhii-matsyshyn/biolistener_sleep_mask_firmware)) driven over the network from a Python daemon.
 
